@@ -1,0 +1,9 @@
+-lib hxcs
+-net-lib native/libilasm.dll
+-net-lib native/PEAPI.dll
+-net-lib native/Mono.CompilerServices.SymbolWriter.dll
+-D net-ver=50
+-D unsafe
+-cp src
+-main Test
+-cs bin/test
