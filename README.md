@@ -7,6 +7,15 @@
 2. __Don't deal with an IL__ - only in-memory IR (no MSIL/CIL generation); this is for performance reasons which leads me to
 3. __Don't require translation of the IR__ - it should only be the result of parsing Haxe source (so we can't take the Haxe compiler's TAST and encode it; it's not serializable by default because it contains types that really only exist in OCaml and would have to be translated; this means we need a [parser](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Parser.hx) and [type checker](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Checker.hx)...)
 4. __Be able to serialize an IR__ - for example, to send it to another service/application operating as a compiler back-end that can then generate the code on the corresponding platform; ideally haxe-in-haxe codegen back-ends should be written for the target language, as, much like with CLR, the language will probably have the best support for generating its own code; this is at least true for CLR, I assume JVM probably has a similar library for emitting raw JVM opcodes and packages/jars (whatever you call them), and this is definitely going to be true if ever there were an LLVM back-end for Haxe (every lib for producing LLVM that I know of is obviously written in an LLVM language)
+5. __Modularity__ - `hscript` is by design, pretty modular (that is, you can use the parser without the checker, you can write plugins, like the Async module, etc...), this build system should be too, and in fact, this part is only concerned with generating PE code from hscript and haxe.macro AST, and would only be available on C# (and eventually PE) targets. In practice, to do this at runtime, you'd need hscript, and under the hood (at least starting out) this will use hscript.
+
+This would allow you to, for example, opt in and out of optimizations/code transformations applied to Haxe code at runtime (you basically drive the compiler). This also means that, to write other targets, one needs only to write a back-end, and a back-end can basically be described as:
+```haxe
+typedef BackEnd = {
+    function compileHaxe(in:Array<haxe.macro.Type>):haxe.io.Bytes; // <--- the executable in binary; whether it be LLVM libs, JAR, or PE libs
+    function compileHscript(in:Array<hscript.Expr.ModuleDecl>):haxe.io.Bytes; // <--- if hscript becomes able to support full Haxe language, this would support the same set of features as compileHaxe; this also makes it a pluggable part of hscript to compile code on the fly
+}
+```
 
 This is a priority list.
 
