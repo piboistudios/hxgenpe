@@ -3,7 +3,7 @@
 `hxgenPE` aims to be a Haxe -> PE compiler, written entirely in Haxe.
 
 ## Goals
-1. __Should run at runtime__ - you should be able to compile Haxe into Portable Executable code at runtime, and also run that code at runtime; Haxe-in-Haxe, the time to output from Haxe source code will matter and directly impact applications relying on this functionality (which is as [trendy](https://en.wikipedia.org/wiki/Representational_state_transfer#Code_on_demand_(optional)) as it is [useful](https://en.wikipedia.org/wiki/Machine_learning))
+1. __Should run at runtime__ - you should be able to compile Haxe into Portable Executable code at runtime, and also run that code at runtime; Haxe-in-Haxe; the time to output from Haxe source code will matter and directly impact applications relying on this functionality (which is as [trendy](https://en.wikipedia.org/wiki/Representational_state_transfer#Code_on_demand_(optional)) as it is [useful](https://en.wikipedia.org/wiki/Machine_learning))
 2. __Don't deal with an IL__ - only in-memory IR (no MSIL/CIL generation); this is for performance reasons which leads me to
 3. __Don't require translation of the IR__ - it should only be the result of parsing Haxe source (so we can't take the Haxe compiler's TAST and encode it; it's not serializable by default because it contains types that really only exist in OCaml and would have to be translated; this means we need a [parser](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Parser.hx) and [type checker](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Checker.hx)...)
 4. __Be able to serialize an IR__ - for example, to send it to another service/application operating as a compiler back-end that can then generate the code on the corresponding platform; ideally haxe-in-haxe codegen back-ends should be written for the target language, as, much like with CLR, the language will probably have the best support for generating its own code; this is at least true for CLR, I assume JVM probably has a similar library for emitting raw JVM opcodes and packages/jars (whatever you call them), and this is definitely going to be true if ever there were an LLVM back-end for Haxe (every LLVM lib I know of is obviously written in an LLVM language)
@@ -22,15 +22,16 @@ This is a priority list.
         - As far as I can tell, this would be a similar effort to making `hscript` support the full Haxe language, so giving up on the `hscript` venture is not really ideal, so this is...
 ### How you can help
  - Contribute to `hscript`; here's what needs to happen:
-  - Parsing:
-    - Abstracts
-    - Enums
-    - Generics
-  - Typing:
-    - Everything that can't be parsed currently
-    - Macros (have fun)
-  - Ecosystem:
-    - Haxelib
+    - Parsing:
+        - Abstracts
+        - Enums
+        - Generics
+    - Typing:
+        - Everything that can't be parsed currently
+        - Macros (have fun)
+    - Ecosystem:
+        - Haxelib
+Or
  - Write a Haxe-in-Haxe parser/typer that isn't a port of the OCaml code that we have pictures of on our walls at home.
  - Ask questions and give criticisms, I'm known to give direct answers, for example...
 ### Am I a Mad Man?
