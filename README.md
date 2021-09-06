@@ -12,7 +12,7 @@
 This would allow you to, for example, opt in and out of optimizations/code transformations applied to Haxe code at runtime (you basically drive the compiler). This also means that, to write other targets, one needs only to write a back-end, and a back-end can basically be described as:
 ```haxe
 typedef BackEnd = {
-    function compileHaxe(in:Array<haxe.macro.Type>):haxe.io.Bytes; // <--- the executable in binary; whether it be LLVM libs, JAR, or PE libs
+    function compileHaxe(in:Array<haxe.macro.Type>):haxe.io.Bytes; // <--- the executable code in binary; whether it be LLVM, JAR, or PE
     function compileHscript(in:Array<hscript.Expr.ModuleDecl>):haxe.io.Bytes; // <--- if hscript becomes able to support full Haxe language, this would support the same set of features as compileHaxe; this also makes it a pluggable part of hscript to compile code on the fly
 }
 ```
