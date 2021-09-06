@@ -1,4 +1,6 @@
 -lib hxcs
+-lib tink_json
+# --macro Boot.load()
 -net-lib native/libilasm.dll
 -net-lib native/PEAPI.dll
 -net-lib native/Mono.CompilerServices.SymbolWriter.dll
