@@ -13,7 +13,12 @@ This is a priority list.
 ### Implications 
 - Starting out (and in the happy path, ending out), this will use `hscript` to parse and type-check code; there will be two versions of the code, one operating directly on the [hscript AST](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Expr.hx) and one operating on the [haxe macro AST, translated from the hscript AST](https://github.com/HaxeFoundation/hscript/blob/master/hscript/Macro.hx) (this is so as to achieve goal#3)
  - This means `hxgenPE` will only support a subset of the Haxe language at first, and all testing will be done for both APIs using hscript to generate macro IR and its own IR.
- - In the happy path; this means `hscript` will support parsing and typing of the full Haxe language (yes, this is a massive endeavour, but also one that would have had to happen for a truly Haxe-in-Haxe compiler that isn't a direct port of the OCaml code we all know and love so much that we want a Haxe-in-Haxe compiler in the first place)
+ - In the happy path this means that:
+    -  `hscript` will support parsing and typing of the full Haxe language (yes, this is a massive endeavour, but also one that would have had to happen for a truly Haxe-in-Haxe compiler that isn't a direct port of the OCaml code we all know and love so much that we want a Haxe-in-Haxe compiler in the first place)
+    - You'd be able to interpret, compile (into PE), then JIT (for portability) or AOT (for speed) compile (and then obviously execute) that PE all with hscript. 
+    - Since this aims to become the first haxe target that utilizes a full haxe-in-haxe approach to building, it is kind of a prototype. This implies:
+        - If this design makes sense and works, `hscript` would become the basis for Haxe-in-Haxe parsing/lexing/typing
+        - We can finally eventually say goodbye to `haxe.macro` package (or at least soft deprecate it, with support only for legacy macro code), which, while it does nice things, and is one of the only of its kind, could be better to us developers.
  - In the sour path this means that:
     - Technically, work to continue writing the code to emit the proper PE code for the haxe macro AST can continue at this point (and the runtime code generation will be deficient, but still suitable to generate complex code; barring support for generics, so casting as the alternative)
     - Time will have been wasted contributing to `hscript` in order to make it support full Haxe, but `hxgenPE` will be partially functional (it'll be able to run on a subset of the haxe language), and able to fulfill goal#1
@@ -31,8 +36,7 @@ This is a priority list.
         - Macros (have fun)
     - Optimizations (the haxe compiler is out of the picture at this point, so those are too)
     - Ecosystem:
-        - Haxelib
-        
+        - Haxelib (although, technically)
 Or
  - Write a Haxe-in-Haxe parser/typer that isn't a port of the OCaml code that we have pictures of on our walls at home.
  - Ask questions and give criticisms, I'm known to give direct answers, for example...
