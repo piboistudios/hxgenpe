@@ -37,6 +37,7 @@ This is a priority list.
     - Optimizations (the haxe compiler is out of the picture at this point, so those are too)
     - Ecosystem:
         - Haxelib (although, technically)
+
 Or
  - Write a Haxe-in-Haxe parser/typer that isn't a port of the OCaml code that we have pictures of on our walls at home.
  - Ask questions and give criticisms, I'm known to give direct answers, for example...
