@@ -31,9 +31,11 @@ This is a priority list.
  - In the sour path this means that:
     - Technically, work to continue writing the code to emit the proper PE code for the haxe macro AST can continue at this point (and the runtime code generation will be deficient, but still suitable to generate complex code; barring support for generics, so casting as the alternative)
     - Time will have been wasted contributing to `hscript` in order to make it support full Haxe, but `hxgenPE` will be partially functional (it'll be able to run on a subset of the haxe language), and able to fulfill goal#1
-    - A solution to get the IR efficiently serialized/deserialized from the haxe eval/macro runtime into the hxcs (and eventually `hxgenpe`) runtime of `hxgenPE` (this comes at a cost and technically violates goal#2/3) _or_
-    - A Haxe-written solution to parse/type Haxe (that _isn't_ a port of the OCaml code that we treasure)
-        - As far as I can tell, this would be a similar effort to making `hscript` support the full Haxe language, so giving up on the `hscript` venture is not really ideal, so this is...
+    
+    - And we would need:
+        - A solution to get the IR efficiently serialized/deserialized from the haxe eval/macro runtime into the hxcs (and eventually `hxgenpe`) runtime of `hxgenPE` (this comes at a cost and technically violates goal#2/3) _or_
+        - A Haxe-written solution to parse/type Haxe (that _isn't_ a port of the OCaml code that we treasure)
+            - As far as I can tell, this would be a similar effort to making `hscript` support the full Haxe language, so giving up on the `hscript` venture is not really ideal, so this is...
 ### How you can help
  - Contribute to `hscript`; here's what needs to happen:
     - Parsing:
