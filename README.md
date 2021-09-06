@@ -29,6 +29,7 @@ This is a priority list.
     - Typing:
         - Everything that can't be parsed currently
         - Macros (have fun)
+    - Optimizations (the haxe compiler is out of the picture at this point, so those are too)
     - Ecosystem:
         - Haxelib
         
