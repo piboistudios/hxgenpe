@@ -47,7 +47,7 @@ This is a priority list.
         - Macros (have fun)
     - Optimizations (the haxe compiler is out of the picture at this point, so those are too)
     - Ecosystem:
-        - Haxelib (although, technically)
+        - Haxelib
 
 Or
  - Write a Haxe-in-Haxe parser/typer that isn't a port of the OCaml code that we have pictures of on our walls at home.
