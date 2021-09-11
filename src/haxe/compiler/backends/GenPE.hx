@@ -50,8 +50,9 @@ class GenPE {
         return bytecode;
 	}
     // add types to checker
-    function firstPass(types:Array<hscript.Expr.ModuleDecl>) {
-
+    function firstPass(decls:Array<hscript.Expr.ModuleDecl>) {
+        for(decl in decls)
+            types.addType(decl);
     }
     // generate PE; pretty sure everything here is wrong atm
     function secondPass(types:Array<hscript.Expr.ModuleDecl>) {
@@ -146,10 +147,6 @@ class HscriptExprTools {
         });
 }
 
-class AssemblyLookup {
-	public static var table = new Map<String, String>();
-}
-
 class HscriptTypeTools {
 	public static function toClrTypeRef(t:hscript.Expr.CType, pe:GenPE)
 		return switch t {
@@ -197,21 +194,6 @@ class HscriptModuleDeclTools {
 			default:
 				null;
 		}
-}
-
-class HscriptModuleTools {
-	// public static function resolveType(module:Array<ModuleDecl>, path:String)
-	//     return module.find(type -> switch type {
-	//         case DClass(c):
-	//             c.name == path;
-	//         case DTypedef(c):
-	//             if(c.name == path)
-	//             switch c.t {
-	//                 case CTPath(pack, _): pack.join('.') == path;
-	//                 default:
-	//                     null;
-	//             }
-	//     })
 }
 
 class PathTools {
