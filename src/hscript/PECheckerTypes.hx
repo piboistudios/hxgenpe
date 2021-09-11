@@ -2,9 +2,9 @@ package hscript;
 import hscript.Checker;
 import hscript.Expr;
 class PECheckerTypes implements CheckerTypes {
-	var typeAssemblies:Map<TType,String> = new Map();
+	var typeAssemblies:Map<String,String> = new Map();
     public function new() {
-        
+
     }
 	public function addType(decl:ModuleDecl) {
         throw new haxe.exceptions.NotImplementedException();
