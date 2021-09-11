@@ -1,4 +1,5 @@
 bin/**
 *.exe
+*.js
 discard.hxml
 discard/**

@@ -1,5 +1,6 @@
 -lib hxcs
 -lib hscript
+-D hscriptPos
 -lib tink_json
 # --macro Boot.load()
 -net-lib native/libilasm.dll
