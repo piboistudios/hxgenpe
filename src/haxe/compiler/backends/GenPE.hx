@@ -1,5 +1,11 @@
 package haxe.compiler.backends;
 
+import mono.ilasm.TypeDef;
+
+using hscript.Tools;
+
+import hscript.Interp;
+import hscript.Checker.TType;
 import hscript.PECheckerTypes;
 import haxe.io.Bytes;
 import hscript.Checker.CheckerTypes;
@@ -33,7 +39,13 @@ using haxe.compiler.backends.GenPE;
 
 class GenPE {
 	public var gen:CodeGen;
-    public var types:PECheckerTypes;
+	public var types:PECheckerTypes;
+
+	var currentPackage = '';
+
+	var evaluatedStaticSets:Map<String, Map<String, Dynamic>> = [];
+	var deferred:Array<Void->Void> = [];
+	var interp = new Interp();
 
 	public function new(gen) {
 		this.gen = gen;
@@ -45,24 +57,31 @@ class GenPE {
 
 	public function buildHscript(types) {
 		firstPass(types);
-        secondPass(types);
-        var bytecode:Bytes = getBinary();
-        return bytecode;
+		secondPass(types);
+		finalPass(types);
+		var bytecode:Bytes = getBinary();
+		return bytecode;
 	}
-    // add types to checker
-    function firstPass(decls:Array<hscript.Expr.ModuleDecl>) {
-        for(decl in decls)
-            types.addType(decl);
-    }
-    // generate PE; pretty sure everything here is wrong atm
-    function secondPass(types:Array<hscript.Expr.ModuleDecl>) {
-        for (type in types)
+
+	// add types to checker
+	function firstPass(decls:Array<hscript.Expr.ModuleDecl>) {
+		for (decl in decls)
+			types.addType(decl);
+	}
+
+	// generate PE (or apparently not... just prep the codegen and set up deferred tasks)
+	function secondPass(types:Array<hscript.Expr.ModuleDecl>) {
+		for (type in types)
 			switch type {
-				case DPackage(path):
-					gen.set_CurrentNameSpace(path.toClrPath());
+				case DPackage(pack):
+					currentPackage = pack.join('.');
+					this.types.setPack(currentPackage);
+					gen.set_CurrentNameSpace(pack.toClrPath());
 				// case DImport(parts, everything):
 				case DClass(c):
+					var name = currentPackage + c.name;
 					var flags = 0;
+
 					if (c.isPrivate)
 						flags = flags | cast TypeAttr.Private;
 					else
@@ -72,50 +91,55 @@ class GenPE {
 					for (field in c.fields) {
 						switch field.kind {
 							case KFunction(f):
-								generateMethod(c.name, field, f);
+								generateMethod(name, field, f);
 							case KVar(v):
-								generateVar(c.name, field, v);
+								generateVar(name, field, v);
 						}
 					}
 				default:
 			}
-    }
+	}
 
-    // pretty sure everything here is wrong
+	// run deferred tasks (finish prepping codegen) and generate PE
+	// I think, if this isn't clumsy you shouldn't need types but.. 
+    // what the heck, more info the better I guess..
+	function finalPass(types:Array<hscript.Expr.ModuleDecl>) {
+		for (deferred in deferred)
+			deferred();
+	}
+
 	function generateMethod(owner:String, field:FieldDecl, f:FunctionDecl) {
-		var flags = 0;
-		for (access in field.access)
-			switch access {
-				case APublic:
-					flags |= cast MethAttr.Public;
-				case AStatic:
-					flags |= cast MethAttr.Static;
-				case APrivate:
-					flags |= cast MethAttr.Private;
-				default:
-			}
+		if (field.access.contains(AStatic)) {
+			var func = EFunction(f.args, f.expr, field.name, f.ret).mk(f.expr);
+			evaluatedStaticSets[owner].set(field.name, interp.execute(func));
+		}
+		var flags = getClrFlags(field, [cast MethAttr.Public, cast MethAttr.Static, cast MethAttr.Private]);
 		var conv = peapi.CallConv.Default;
 		var implAttr = ImplAttr.IL;
-		var retType = f.ret.toClrTypeRef(this);
+		var ret = types.checker.check(f.expr, WithType(types.toTType(f.ret)));
+		var retType = toClrTypeRef(ret);
 		var ownerType = gen.CurrentTypeDef; // lookupType(owner).toClrTypeDef(this);
 		var paramList = new cs.system.collections.ArrayList();
 		for (arg in f.args)
-			paramList.Add(arg.t.toClrTypeRef(this));
+			paramList.Add(if (arg.value == null) types.toTType(arg.t) else types.checker.check(arg.value, WithType(types.toTType(arg.t))));
+
 		var genericParameters = null;
-		var method = new MethodDef(gen, cast flags, conv, implAttr, field.name, retType, paramList, field.location(), genericParameters, ownerType);
+		var method = new MethodDef(gen, cast flags, conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
 		if (field.name == "main" && owner == mainClass)
 			method.EntryPoint();
-		f.expr.mapToClrMethodBody(method);
+		f.expr.mapToClrMethodBody(method, ret);
 	}
 
-	function generateVar(owner:String, field:FieldDecl, v:VarDecl) {}
-
-	public function lookupType(path:String):CType {
-		throw new haxe.exceptions.NotImplementedException();
-	}
-
-	public function lookupDecl(path:String):ModuleDecl {
-		throw new haxe.exceptions.NotImplementedException();
+	function generateVar(owner:String, field:FieldDecl, v:VarDecl) {
+		if (field.access.contains(AStatic)) {
+			deferred.push(() -> evaluatedStaticSets[owner].set(field.name, interp.execute(v.expr)));
+		}
+		var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
+		var name = field.name;
+		var type = toClrTypeRef(if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type));
+		var field = new FieldDef(flags, name, type);
+		gen.AddFieldDef(field);
+		deferred.push(() -> tryInitField(field, gen.CurrentTypeDef));
 	}
 
 	var mainClass(default, null):String;
@@ -124,81 +148,58 @@ class GenPE {
 		throw new haxe.exceptions.NotImplementedException();
 	}
 
-	public function getType(arg0:String):String {
+	function toClrTypeRef(ret:TType):BaseTypeRef {
 		throw new haxe.exceptions.NotImplementedException();
 	}
+
+	/**
+	 * Gets the CLR flags for a hscript field decl
+	 * @param field 
+	 * @param enumSet - The set of flags to use, in order they should be: public flag, static flag, private flag
+	 */
+	function getClrFlags<T>(field:FieldDecl, enumSet:Array<Int>):T {
+		var flags = 0;
+		for (access in field.access)
+			switch access {
+				case APublic:
+					flags |= enumSet[0];
+				case AStatic:
+					flags |= enumSet[1];
+				case APrivate:
+					flags |= enumSet[2];
+				default:
+			}
+		return cast flags;
+	}
+
+	function tryInitField(field:FieldDef, typeDef:TypeDef) {}
 }
 
 class ClrMethodDefTools {
 	public static function op(method:MethodDef, op, operand, loc)
 		method.AddInstr(new MethodInstr(op, operand, loc));
 }
+
 class OpTools {
-    public static inline function ldstr(s:String, loc) return new LdstrInstr({
-        var arr:Array<UInt8> = [for(i in 0...s.length) s.fastCodeAt(i)];
-        Lib.nativeArray(arr, false);
-    }, loc);
+	public static inline function ldstr(s:String, loc)
+		return new LdstrInstr({
+			var arr:Array<UInt8> = [for (i in 0...s.length) s.fastCodeAt(i)];
+			Lib.nativeArray(arr, false);
+		}, loc);
 }
 
 class HscriptExprTools {
-    public static inline function location(expr:hscript.Expr) return new Location(expr.line, expr.pmin);
-	public static function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef)
-		expr.iter(e -> {
-        });
-}
+	public static inline function location(expr:hscript.Expr)
+		return new Location(expr.line, expr.pmin);
 
-class HscriptTypeTools {
-	public static function toClrTypeRef(t:hscript.Expr.CType, pe:GenPE)
-		return switch t {
-			case CTPath(pack, params):
-				var path = pack.join('.');
-				var type:hscript.Expr.ModuleDecl = pe.lookupDecl(path);
-				type.toClrTypeRef(pe);
-			case CTFun(_, _):
-				new TypeRef("haxe.lang.Function", false, null);
-			case CTAnon(_):
-				new TypeRef("haxe.lang.DynamicObject", false, null);
-			case CTParent(t):
-				t.toClrTypeRef(pe);
-			case CTOpt(t):
-				t.toClrTypeRef(pe);
-			case CTNamed(_, t):
-				t.toClrTypeRef(pe);
-			default:
-				null;
-		}
-}
-
-class HscriptFieldDeclTools {
-	public static function location(decl:hscript.Expr.FieldDecl) {
-		// return cl.pos; TODO: add position tracking to hscript module decls
-		return new Location(0, 0);
-	}
+	public static function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, type:TType)
+		expr.iter(e -> {});
 }
 
 class HscriptModuleDeclTools {
 	public static function location(cl:hscript.Expr.ModuleDecl) {
 		// return cl.pos; TODO: add position tracking to hscript module decls
 		return new Location(0, 0);
-	}
-
-	public static function toClrTypeRef(t:hscript.Expr.ModuleDecl, pe:GenPE):BaseTypeRef
-		return switch t {
-			case DImport(pack, everything):
-				var t = pe.lookupType(pack.join('.'));
-				t.toClrTypeRef(pe);
-			case DClass(c):
-				if (c.isExtern) pe.gen.ExternTable.GetTypeRef(pe.getType(c.name), c.name, false); else {
-					new TypeRef(c.name, false, null);
-				}
-			default:
-				null;
-		}
-}
-
-class PathTools {
-	public static function toClrPath(path:String) {
-		return path.split('.').map(part -> part.substr(0, 1).toUpperCase() + part.substr(1)).join('.');
 	}
 }
 

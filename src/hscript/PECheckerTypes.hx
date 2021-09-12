@@ -8,7 +8,7 @@ using hscript.PECheckerTypes;
 
 class CheckerBase implements CheckerTypes {
 	var types:Map<String, CTypedecl> = new Map();
-	var checker:Checker;
+	public var checker:Checker;
 	var localParams:Map<String, TType>;
 
 	public function resolve(name:String, ?args:Array<TType>):TType {
@@ -58,14 +58,19 @@ class CheckerBase implements CheckerTypes {
 
 class PECheckerTypes extends CheckerBase {
 	var typeAssemblies:Map<String, String> = new Map();
+	var currentPack = '';
 
 	public function new() {}
 
+	public function setPack(pk) {
+		currentPack = pk;
+	}
+
 	public function addType(decl:ModuleDecl) {
-		var name = '';
+		var name = currentPack;
 		var type:CTypedecl = switch decl {
 			case DClass(c):
-				name = c.name;
+				name += c.name;
 				addDeclAssembly(c);
 				var cclass:CClass = {
 					name: name,
@@ -82,8 +87,9 @@ class PECheckerTypes extends CheckerBase {
 				CTClass(cclass);
 
 			case DTypedef(c):
+				name += c.name;
 				var ctypedef:CTypedef = {
-					name: c.name,
+					name: name,
 					params: [],
 					t: toTType(c.t)
 				};
@@ -101,7 +107,7 @@ class PECheckerTypes extends CheckerBase {
 	public function getAssembly(type:String):String
 		return typeAssemblies[type];
 
-	function toTType(t:CType):TType
+	public function toTType(t:CType):TType
 		return switch t {
 			case CTPath(pack, params):
 				resolve(pack.join('.'), [for (param in params) toTType(param)]);
@@ -133,7 +139,7 @@ class PECheckerTypes extends CheckerBase {
 				// 	null;
 		}
 
-	function toCField(f:FieldDecl):CField
+	public function toCField(f:FieldDecl):CField
 		return {
 			name: f.name,
 			params: [], // TODO: add params to hscript fields
