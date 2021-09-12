@@ -3,10 +3,14 @@ package hscript;
 import hscript.Checker;
 import hscript.Expr;
 
+using Lambda;
+using hscript.PECheckerTypes;
+
 class CheckerBase implements CheckerTypes {
-    var types:Map<String, CTypedecl> = new Map();
-    var localParams : Map<String,TType>;
-    
+	var types:Map<String, CTypedecl> = new Map();
+	var checker:Checker;
+	var localParams:Map<String, TType>;
+
 	public function resolve(name:String, ?args:Array<TType>):TType {
 		if (name == "Null") {
 			if (args == null || args.length != 1)
@@ -27,18 +31,19 @@ class CheckerBase implements CheckerTypes {
 		}
 	}
 
-	public function getType( name : String, ?args : Array<TType> ) : TType {
-		if( localParams != null ) {
+	public function getType(name:String, ?args:Array<TType>):TType {
+		if (localParams != null) {
 			var t = localParams.get(name);
-			if( t != null ) return t;
+			if (t != null)
+				return t;
 		}
-		var t = resolve(name,args);
-		if( t == null ) {
+		var t = resolve(name, args);
+		if (t == null) {
 			var pack = name.split(".");
-			if( pack.length > 1 ) {
+			if (pack.length > 1) {
 				// bugfix for some args reported as pack._Name.Name while they are not private
-				var priv = pack[pack.length-2];
-				if( priv.charCodeAt(0) == "_".code ) {
+				var priv = pack[pack.length - 2];
+				if (priv.charCodeAt(0) == "_".code) {
 					pack.remove(priv);
 					return getType(pack.join("."), args);
 				}
@@ -57,19 +62,105 @@ class PECheckerTypes extends CheckerBase {
 	public function new() {}
 
 	public function addType(decl:ModuleDecl) {
-		switch decl {
+		var name = '';
+		var type:CTypedecl = switch decl {
 			case DClass(c):
+				name = c.name;
+				addDeclAssembly(c);
+				var cclass:CClass = {
+					name: name,
+					fields: [
+						for (f in c.fields.filter(field -> !field.access.contains(FieldAccess.AStatic)).map(toCField))
+							f.name => f
+					],
+					statics: [
+						for (f in c.fields.filter(field -> field.access.contains(FieldAccess.AStatic)).map(toCField))
+							f.name => f
+					],
+					params: []
+				};
+				CTClass(cclass);
+
 			case DTypedef(c):
+				var ctypedef:CTypedef = {
+					name: c.name,
+					params: [],
+					t: toTType(c.t)
+				};
+				CTTypedef(ctypedef);
 			// TODO: hscript abstracts and enums
 			// case DAbstract(c):
 			// case DEnum(c):
 			default:
+				null;
+		}
+		if (type != null)
+			types.set(name, type);
+	}
+
+	public function getAssembly(type:String):String
+		return typeAssemblies[type];
+
+	function toTType(t:CType):TType
+		return switch t {
+			case CTPath(pack, params):
+				resolve(pack.join('.'), [for (param in params) toTType(param)]);
+			case CTAnon(fields):
+				var fields = [
+					for (field in fields)
+						{
+							t: toTType(field.t),
+							opt: isOpt(field.t), // TODO: only works for function args in hscript, not anon fields atm.
+							name: field.name
+						}
+				];
+				TAnon(fields);
+			case CTParent(t): toTType(t);
+			case CTOpt(t): toTType(t);
+			case CTNamed(_, t): toTType(t);
+			case CTFun(args, ret):
+				var args = [
+					for (arg in args)
+						switch arg {
+							case CTNamed(n, t):
+								{name: n, t: toTType(t), opt: isOpt(t)}
+							default:
+								throw 'invalid hscript argument type';
+						}
+				];
+				TFun(args, toTType(ret));
+				// default:
+				// 	null;
+		}
+
+	function toCField(f:FieldDecl):CField
+		return {
+			name: f.name,
+			params: [], // TODO: add params to hscript fields
+			t: switch f.kind {
+				case KFunction(f):
+					var args = f.args.map(arg -> {name: arg.name, opt: arg.opt, t: toTType(arg.t)});
+					TFun(args, toTType(f.ret));
+				case KVar(v):
+					checker.check(v.expr);
+			},
+			isPublic: f.access.contains(APublic),
+			canWrite: true,
+			complete: !f.meta.exists(m -> m.name == ':noCompletion')
+		}
+
+	function addDeclAssembly(d:ClassDecl) {
+		if (d.isExtern) {
+			var assemblyMeta = d.meta.array().find(m -> m.name == "netLib");
+			if (assemblyMeta.params[0].e.match(EConst(CString(_)))) {
+				var const:hscript.Expr.Const = assemblyMeta.params[0].e.getParameters()[0];
+				var assemblyName = const.getParameters()[0];
+				typeAssemblies[d.name] = assemblyName;
+			}
 		}
 	}
 
-
-	public function getAssembly(type:TType):String {
-		throw new haxe.exceptions.NotImplementedException();
+	function isOpt(arg0:CType):Bool {
+		return arg0.match(CTOpt(_));
 	}
-	
 }
