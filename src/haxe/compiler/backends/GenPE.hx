@@ -40,15 +40,16 @@ using haxe.compiler.backends.GenPE;
 class GenPE {
 	public var gen:CodeGen;
 	public var types:PECheckerTypes;
-
+    var outputFile = '';
 	var currentPackage = '';
 
 	var evaluatedStaticSets:Map<String, Map<String, Dynamic>> = [];
 	var deferred:Array<Void->Void> = [];
 	var interp = new Interp();
 
-	public function new(gen) {
-		this.gen = gen;
+	public function new(outputFile, isDll, debuggingInfo, autoInherit) {
+		this.gen = new CodeGen(outputFile, isDll, debuggingInfo, autoInherit);
+        this.outputFile = outputFile;
 	}
 
 	public function buildHaxe(types:Array<haxe.macro.Type>) {
@@ -106,6 +107,7 @@ class GenPE {
 	function finalPass(types:Array<hscript.Expr.ModuleDecl>) {
 		for (deferred in deferred)
 			deferred();
+        gen.Write(); // assemblies have been outputted
 	}
 
 	function generateMethod(owner:String, field:FieldDecl, f:FunctionDecl) {
@@ -144,8 +146,13 @@ class GenPE {
 
 	var mainClass(default, null):String;
 
+    // this is kind of dumb, really only exists to some interface I made up for haxe compiler back ends..
+    // technically back-ends return binaries directly.. I think that's the right way to go about this
+    // if you just want the file, you can ignore the output I guess, but I imagine if you're
+    // generating binaries and intending to send them somewhere, this I will handle reading the file for you
+    // hm... opinions.. decisions..
 	function getBinary():Bytes {
-		throw new haxe.exceptions.NotImplementedException();
+		return sys.io.File.getBytes(outputFile);
 	}
 
 	function toClrTypeRef(ret:TType):BaseTypeRef {
