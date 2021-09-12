@@ -45,7 +45,7 @@ import mono.ilasm.CodeGen;
 using Lambda;
 using StringTools;
 using haxe.compiler.backends.GenPE;
-
+typedef Deferred = Array<Void->Void>;
 class GenPE {
     public var gen:CodeGen;
     public var types:PECheckerTypes;
@@ -56,7 +56,10 @@ class GenPE {
     var useSystemDynamicTypes = true;
     var firstPassComplete = false;
     var evaluatedStaticSets:Map<String, Map<String, Dynamic>> = [];
-    var deferred:Array<Void->Void> = [];
+    var deferred:{
+        firstWave:Deferred,
+        secondWave:Deferred
+    } = {firstWave: [], secondWave: []}
     var interp = new Interp();
 
     public function new(outputFile, isDll, debuggingInfo, autoInherit) {
@@ -120,7 +123,9 @@ class GenPE {
     // I think, if this isn't clumsy you shouldn't need types but..
     // what the heck, more info the better I guess..
     function finalPass(types:Array<hscript.Expr.ModuleDecl>) {
-        for (deferred in deferred)
+        for (deferred in deferred.firstWave)
+            deferred();
+        for(deferred in deferred.secondWave)
             deferred();
         gen.Write(); // assemblies have been outputted
     }
@@ -149,7 +154,7 @@ class GenPE {
 
     function generateVar(owner:String, field:FieldDecl, v:VarDecl) {
         if (field.access.contains(AStatic)) {
-            deferred.push(() -> evaluatedStaticSets[owner].set(field.name, interp.execute(v.expr)));
+            deferred.firstWave.push(() -> evaluatedStaticSets[owner].set(field.name, interp.execute(v.expr)));
         }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
@@ -157,7 +162,7 @@ class GenPE {
         var type = toClrTypeRef(if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type));
         var field = new FieldDef(flags, name, type);
         gen.AddFieldDef(field);
-        deferred.push(() -> tryInitField(field, gen.CurrentTypeDef));
+        deferred.secondWave.push(() -> tryInitField(field, gen.CurrentTypeDef));
     }
 
     var mainClass(default, null):String;
@@ -245,17 +250,24 @@ class GenPE {
         return cast flags;
     }
 
+
+
+    // try to evaluate the field to a constant, if it works, set the value for the CIL member
     function tryInitField(field:FieldDef, typeDef:TypeDef) {
         throw new NotImplementedException();
     }
 
+    // System.Dynamic.DynamicObject or ExpandoObject or whatever? But also, maybe some homegrown type for this?
     function getDynamicTypeRef():BaseTypeRef {
         throw new NotImplementedException();
     }
+
+    // da meat
     function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, type:TType) {
         throw new NotImplementedException();    
     }
 
+    // haxe.lang.Function? Right? Wrapping a delegate?
     function getFunctionTypeRef(args:Array<{name:String, opt:Bool, t:TType}>, ret:TType):BaseClassRef {
         throw new NotImplementedException();
     }
