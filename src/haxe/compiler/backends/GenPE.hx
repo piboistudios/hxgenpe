@@ -1,5 +1,28 @@
 package haxe.compiler.backends;
 
+import cs.system.collections.ArrayList;
+import mono.ilasm.SwitchInstr;
+import mono.ilasm.LabelInfo;
+import mono.ilasm.LdtokenInstr;
+import mono.ilasm.IFieldRef;
+import haxe.ds.Either;
+import mono.ilasm.CalliInstr;
+import peapi.CallConv;
+import mono.ilasm.TypeInstr;
+import peapi.TypeOp;
+import mono.ilasm.FieldInstr;
+import mono.ilasm.GenericParamRef;
+import peapi.FieldOp;
+import mono.ilasm.BaseMethodRef;
+import peapi.MethodOp;
+import mono.ilasm.BranchInstr;
+import peapi.BranchOp;
+import mono.ilasm.LdcInstr;
+import mono.ilasm.MiscInstr;
+import cs.types.UInt64;
+import peapi.IntOp;
+import mono.ilasm.IntInstr;
+import mono.ilasm.SimpInstr;
 import mono.ilasm.MethodRef;
 import mono.ilasm.BaseClassRef;
 import mono.ilasm.ExternTypeRef;
@@ -45,7 +68,9 @@ import mono.ilasm.CodeGen;
 using Lambda;
 using StringTools;
 using haxe.compiler.backends.GenPE;
+
 typedef Deferred = Array<Void->Void>;
+
 class GenPE {
     public var gen:CodeGen;
     public var types:PECheckerTypes;
@@ -125,7 +150,7 @@ class GenPE {
     function finalPass(types:Array<hscript.Expr.ModuleDecl>) {
         for (deferred in deferred.firstWave)
             deferred();
-        for(deferred in deferred.secondWave)
+        for (deferred in deferred.secondWave)
             deferred();
         gen.Write(); // assemblies have been outputted
     }
@@ -158,7 +183,7 @@ class GenPE {
         }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
-        
+
         var type = toClrTypeRef(if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type));
         var field = new FieldDef(flags, name, type);
         gen.AddFieldDef(field);
@@ -175,8 +200,6 @@ class GenPE {
     function getBinary():Bytes {
         return sys.io.File.getBytes(outputFile);
     }
-
-    
 
     function clrApply(e:BaseClassRef, types:Array<TType>)
         return e.GetGenericTypeInst({
@@ -250,8 +273,6 @@ class GenPE {
         return cast flags;
     }
 
-
-
     // try to evaluate the field to a constant, if it works, set the value for the CIL member
     function tryInitField(field:FieldDef, typeDef:TypeDef) {
         throw new NotImplementedException();
@@ -264,13 +285,114 @@ class GenPE {
 
     // da meat
     function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, type:TType) {
-        throw new NotImplementedException();    
+        throw new NotImplementedException();
     }
 
     // haxe.lang.Function? Right? Wrapping a delegate?
     function getFunctionTypeRef(args:Array<{name:String, opt:Bool, t:TType}>, ret:TType):BaseClassRef {
         throw new NotImplementedException();
     }
+
+    // begin shameless ripping from ILParser.jay
+    inline function noneInstr(opcode:peapi.Op, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new SimpInstr(opcode, loc));
+
+    inline function localIntInstr(opcode:IntOp, int:Int, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, int, loc));
+
+    inline function localIdInstr(opcode:IntOp, id:String, loc:Location) {
+        var slot = gen.CurrentMethodDef.GetNamedLocalSlot(id);
+        if (slot < 0)
+            throw 'Undeclared identifier $id';
+        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, slot, loc));
+    }
+
+    inline function paramInt32Instr(opcode:IntOp, int:Int, loc:Location)
+        return localIntInstr(opcode, int, loc);
+
+    inline function paramIdInstr(opcode:IntOp, id:String, loc:Location) {
+        var pos = gen.CurrentMethodDef.GetNamedParamPos(id);
+        if (pos < 0)
+            throw 'Undeclared identifier $id';
+        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, pos, loc));
+    }
+
+    inline function intInt32Instr(opcode:IntOp, int:Int, loc:Location)
+        return localIntInstr(opcode, int, loc);
+
+    inline function intIdInstr(opcode:IntOp, id:String, loc:Location)
+        return localIdInstr(opcode, id, loc);
+
+    inline function r8Int64Instr(instr:MiscInstr, long:Int64, loc:Location)
+        switch instr {
+            case MiscInstr.ldc_i8:
+                gen.CurrentMethodDef.AddInstr(new LdcInstr(instr, long, loc));
+            default:
+        }
+
+    inline function r8Float64Instr(instr:MiscInstr, double:Float, loc:Location)
+        switch instr {
+            case MiscInstr.ldc_r4 | MiscInstr.ldc_i8:
+                gen.CurrentMethodDef.AddInstr(new LdcInstr(instr, double, loc));
+            default:
+        }
+
+    inline function brTargetInt32Instr(branchOp:BranchOp, int:Int, loc:Location) {
+        var target = gen.CurrentMethodDef.AddLabel(int);
+        gen.CurrentMethodDef.AddInstr(new BranchInstr(branchOp, target, loc));
+    }
+
+    inline function brTargetIdInstr(branchOp:BranchOp, id:String, loc:Location) {
+        var target = gen.CurrentMethodDef.AddLabel(id);
+        gen.CurrentMethodDef.AddInstr(new BranchInstr(branchOp, target, loc));
+    }
+
+    inline function methodInstr(methodOp:MethodOp, methRef:BaseMethodRef, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new MethodInstr(methodOp, methRef, loc));
+
+    inline function fieldInstr(fieldOp:FieldOp, type:BaseTypeRef, owner:BaseTypeRef, name:String, loc:Location) {
+        // not sure if this is right
+        var gpr = Std.downcast(type, GenericParamRef);
+        if (gpr != null && gen.CurrentMethodDef != null)
+            gen.CurrentMethodDef.ResolveGenParam(cast gpr.PeapiType);
+        var fieldref = owner.GetFieldRef(type, name);
+        gen.CurrentMethodDef.AddInstr(new FieldInstr(fieldOp, fieldref, loc));
+    }
+
+    inline function basicFieldInstr(fieldOp:FieldOp, type:BaseTypeRef, name:String, loc:Location) {
+        var fieldRef = gen.GetGlobalFieldRef(type, name);
+        gen.CurrentMethodDef.AddInstr(new FieldInstr(fieldOp, fieldRef, loc));
+    }
+
+    inline function typeInstr(typeOp:TypeOp, type:BaseTypeRef, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new TypeInstr(typeOp, type, loc));
+
+    inline function loadStringInstr(string:String, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new LdstrInstr(string, loc));
+
+    inline function callInstr(callingConvention:CallConv, type:BaseTypeRef, types:Array<BaseTypeRef>, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new CalliInstr(callingConvention, type, cs.Lib.nativeArray(types, false), loc));
+
+    inline function tokenInstr(instr:MiscInstr, tokenType:Either<IFieldRef, Either<BaseMethodRef, BaseTypeRef>>, loc:Location)
+        gen.CurrentMethodDef.AddInstr(switch tokenType {
+            case Left(v):
+                new LdtokenInstr(v, loc);
+            case Right(v):
+                switch v {
+                    case Left(v):
+                        new LdtokenInstr(v, loc);
+                    case Right(v):
+                        new LdtokenInstr(v, loc);
+                }
+        });
+
+    inline function switchInstr(labels:Array<LabelInfo>, loc:Location)
+        gen.CurrentMethodDef.AddInstr(new SwitchInstr({
+            var list = new ArrayList();
+            for (label in labels)
+                list.Add(label);
+            list;
+        }, loc));
 }
 
 class ClrMethodDefTools {
