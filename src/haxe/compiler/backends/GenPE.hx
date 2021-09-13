@@ -92,8 +92,8 @@ class GenPE {
         this.outputFile = outputFile;
     }
 
-    // pretty sure you won't be able to support complex static initializers
-    // because eval doesn't exist in Haxe... I guess unless you run haxe and interpret stuff..
+    // wait that's not how static initializers work, I guess just macros won't work. 
+        //So the AST would have to have had macros already applied
     public function buildHaxe(types:Array<haxe.macro.Type>) {
         throw 'not implemented';
     }
@@ -156,12 +156,24 @@ class GenPE {
     }
 
     function generateMethod(owner:String, field:FieldDecl, f:FunctionDecl) {
-        if (field.access.contains(AStatic)) {
-            var func = EFunction(f.args, f.expr, field.name, f.ret).mk(f.expr);
-            evaluatedStaticSets[owner].set(field.name, interp.execute(func));
-        }
         var flags = getClrFlags(field, [cast MethAttr.Public, cast MethAttr.Static, cast MethAttr.Private]);
-        var conv = peapi.CallConv.Default;
+        flags |= cast MethAttr.HideBySig;
+        var conv:Int = cast peapi.CallConv.Default;
+        if(field.name == 'new') {
+            flags |= cast MethAttr.SpecialName;
+            flags |= cast MethAttr.RTSpecialName;
+        }
+        if (field.access.contains(AStatic)) {
+            // what?
+            // var func = EFunction(f.args, f.expr, field.name, f.ret).mk(f.expr);
+            // evaluatedStaticSets[owner].set(field.name, interp.execute(func));
+        } else {
+            conv |= cast CallConv.Instance;
+        }
+        if(false) {// check if f has params...
+            conv |= cast CallConv.Generic;
+        }
+
         var implAttr = ImplAttr.IL;
         var ret = types.checker.check(f.expr, WithType(types.toTType(f.ret)));
         var retType = toClrTypeRef(ret);
@@ -171,16 +183,20 @@ class GenPE {
             paramList.Add(if (arg.value == null) types.toTType(arg.t) else types.checker.check(arg.value, WithType(types.toTType(arg.t))));
 
         var genericParameters = null;
-        var method = new MethodDef(gen, cast flags, conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
+        var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
         if (field.name == "main" && owner == mainClass)
             method.EntryPoint();
+        method.SetMaxStack(8);  // apparently this only matters for PE verification and has nothing to do with runtime
+        // so, unless this value is intelligently set, there's a chance the PE won't be verifiable
+        // BUT by default .NET allows unverifiable PEs so.... is it worth the bother? Not right now
         mapToClrMethodBody(f.expr, method, ret);
     }
 
     function generateVar(owner:String, field:FieldDecl, v:VarDecl) {
-        if (field.access.contains(AStatic)) {
-            deferred.firstWave.push(() -> evaluatedStaticSets[owner].set(field.name, interp.execute(v.expr)));
-        }
+        // what?
+        // if (field.access.contains(AStatic)) {
+        //     deferred.firstWave.push(() -> evaluatedStaticSets[owner].set(field.name, interp.execute(v.expr)));
+        // }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
 
