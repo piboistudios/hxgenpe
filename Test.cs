@@ -8,7 +8,9 @@ namespace Test {
             var _= "test";
             var inner = new Inner("test");
             inner.Set((x + 5) *2,y);
+            inner.Test(1,2,3,4,5,6,7);
             System.Console.WriteLine(_);
+
             // EBinop('*', EParent(EBinop('+',EIdent('x'), 5))), 2)
             /*
             var ops = [];
@@ -30,6 +32,19 @@ namespace Test {
             public void Set(int x, double y) {
                 this.x = x;
                 this.y = y;
+            }
+            public void Test(params int[] x) {
+                foreach(var i in x) {
+                    System.Console.WriteLine(i.ToString());
+                }
+                
+                if(this.x < 10) {
+                    this.x++;
+                } else if(this.x < 5) {
+                    this.x--;
+                } else {
+                    this.x *= 2;
+                }
             }
             public int x = 0;
             public double y = 0;

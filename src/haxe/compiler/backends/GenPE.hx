@@ -1,5 +1,7 @@
 package haxe.compiler.backends;
-
+import hscript.Checker;
+import mono.ilasm.HandlerBlock;
+import mono.ilasm.Local;
 import cs.system.collections.ArrayList;
 import mono.ilasm.SwitchInstr;
 import mono.ilasm.LabelInfo;
@@ -74,8 +76,11 @@ typedef Deferred = Array<Void->Void>;
 class GenPE {
     public var gen:CodeGen;
     public var types:PECheckerTypes;
+    var previous:Any;
+    var printer = new hscript.Printer();
 
     var outputFile = '';
+    var labelRefCount:Map<String, Int> = [];
     var currentPackage = '';
     // I guess we shouldn't force dependencies... but for now, this will rely on System.Linq.Expressions.dll
     var useSystemDynamicTypes = true;
@@ -93,7 +98,7 @@ class GenPE {
     }
 
     // wait that's not how static initializers work, I guess just macros won't work. 
-        //So the AST would have to have had macros already applied
+        // So the AST would have to have had macros already applied
     public function buildHaxe(types:Array<haxe.macro.Type>) {
         throw 'not implemented';
     }
@@ -189,7 +194,23 @@ class GenPE {
         method.SetMaxStack(8);  // apparently this only matters for PE verification and has nothing to do with runtime
         // so, unless this value is intelligently set, there's a chance the PE won't be verifiable
         // BUT by default .NET allows unverifiable PEs so.... is it worth the bother? Not right now
+        labelRefCount = [];
         mapToClrMethodBody(f.expr, method, ret);
+    }
+
+    
+    function referenceLabel(refName) {
+        var c = labelRefCount[refName];
+        if(c == null) c = 0;
+        return '$refName$c';
+    }
+
+    function placeLabelRef(refName) {
+        var labelRef = referenceLabel(refName);
+        if(!labelRefCount.exists(refName)) {
+            labelRefCount[refName] = 1;
+        } else labelRefCount[refName]++;
+        return gen.CurrentMethodDef.AddLabel(labelRef);
     }
 
     function generateVar(owner:String, field:FieldDecl, v:VarDecl) {
@@ -300,8 +321,78 @@ class GenPE {
     }
 
     // da meat
-    function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, type:TType) {
-        throw new NotImplementedException();
+    function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType) {
+        var with = if(withType != null) WithType(withType) else null;
+        expr.iter(e -> switch e.expr() {
+            case EVar(n, t, e): // should support an array... e.g. var a,b,c;
+                var type = types.checker.check(e, if(t != null) WithType(types.toTType(t)) else null);
+                gen.CurrentMethodDef.AddLocals({
+                    var locals = new ArrayList();
+                    locals.Add(new Local(-1, n, toClrTypeRef(type)));
+                    locals;
+                });
+                mapToClrMethodBody(e, method, ret, type);
+                localIdInstr(IntOp.stloc_s, n, e.location());
+            case EBlock(e):
+                var from = gen.CurrentMethodDef.AddLabel();
+                gen.CurrentMethodDef.BeginLocalsScope();
+                for(expr in e)
+                    mapToClrMethodBody(expr, method, ret, withType);
+                previous = new HandlerBlock(from, gen.CurrentMethodDef.AddLabel());
+                gen.CurrentMethodDef.EndLocalsScope();
+            case EUnop(op, prefix, e):
+                var type = types.checker.check(e, with);
+                handleUnop(op, prefix, e, type);
+            case EBinop(op, e1, e2):
+                var type1 = types.checker.check(e1, with);
+                var type2 = types.checker.check(e2, WithType(type1));
+                handleBinop(op, [e1, e2], [type1, type2]);
+            case ECall(e, params):
+                var callerType = types.checker.check(e, with);
+                var paramTypes = [];
+                switch callerType {
+                    case TFun(args, ret):
+                        paramTypes = [for(i in 0...params.length) {
+                            var arg = params[i];
+                            var argType = args[i].t;
+                            types.checker.check(arg, if(argType != null) WithType(argType) else null);
+                        }];
+                        // not sure if the default case is right... I mean, there's callable types in Haxe
+                    default: throw '${printer.exprToString(e)} is not callable (${e.location()})';
+                }
+                handleCall(e, callerType, params, paramTypes, withType);
+            case EIf(cond, e1, e2):
+                types.checker.check(cond, WithType(TBool));
+                
+                // var branchEnd:LabelInfo = null;
+                mapToClrMethodBody(cond, method, ret, withType);
+                brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_COND), cond.location());
+                mapToClrMethodBody(e1, method, ret, withType);
+                brTargetIdInstr(BranchOp.br_s, referenceLabel(LabelRefs.END_IF), e1.location());
+                noneInstr(peapi.Op.nop, e1.location());
+                var endOfConditionLabel = placeLabelRef(LabelRefs.END_COND);
+                if(e2 != null) {
+                    mapToClrMethodBody(e2, method, ret, withType);
+                }
+                noneInstr(peapi.Op.nop, e.location());
+                var endIfLabel = placeLabelRef(LabelRefs.END_IF);
+            case EWhile(cond, e):
+            case EFor(v, it, e):
+            case EFunction(args, e, name, ret):
+            case EArray(e, index): // array access
+            case EArrayDecl(e): // array declaration
+            case ENew(cl, params): // newobj
+            case EThrow(e):
+            case ETry(e, v, t, ecatch): // TODO: hscript: catch should be an array....
+            case EObject(fl):
+            case ETernary(cond, e1, e2):
+            case ESwitch(e, cases, defaultExpr):
+            case EDoWhile(cond, e):
+            case EMeta(name, args, e):
+            case ECheckType(e, t): 
+                // this is probably where I'll get a good chance to fix CLR generic calling convention...
+            default:
+        });
     }
 
     // haxe.lang.Function? Right? Wrapping a delegate?
@@ -359,7 +450,7 @@ class GenPE {
     }
 
     inline function brTargetIdInstr(branchOp:BranchOp, id:String, loc:Location) {
-        var target = gen.CurrentMethodDef.AddLabel(id);
+        var target = gen.CurrentMethodDef.AddLabelRef(id);
         gen.CurrentMethodDef.AddInstr(new BranchInstr(branchOp, target, loc));
     }
 
@@ -409,6 +500,18 @@ class GenPE {
                 list.Add(label);
             list;
         }, loc));
+
+	function handleUnop(op:String, prefix:Bool, e:Expr, type:TType) {
+		throw new haxe.exceptions.NotImplementedException();
+	}
+
+	function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {
+		throw new haxe.exceptions.NotImplementedException();
+	}
+
+	function handleCall(e:Expr, callerType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType) {
+		throw new haxe.exceptions.NotImplementedException();
+	}
 }
 
 class ClrMethodDefTools {
@@ -440,4 +543,10 @@ class PackTools {
     public static function toClrPath(path:Array<String>) {
         return path.map(part -> part.substr(0, 1).toUpperCase() + part.substr(1)).join('.');
     }
+}
+
+
+enum abstract LabelRefs(String) from String to String {
+    var END_IF = "END_IF_";
+    var END_COND = "END_COND_";
 }

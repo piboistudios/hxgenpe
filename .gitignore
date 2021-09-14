@@ -3,3 +3,4 @@ bin/**
 *.js
 discard.hxml
 discard/**
+Test.*
