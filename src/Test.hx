@@ -19,6 +19,7 @@ import mono.ilasm.CodeGen;
 
 class Test {
     public static function main() {
+        // var action = new cs.system.Action()
         var t = 'test';
         var cg = new CodeGen("test.exe", false, false, false);
         cg.BeginSourceFile("Test.hx");
