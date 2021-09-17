@@ -3,7 +3,7 @@ bin/**
 *.js
 *.il
 *.res
-discard.hxml
+discard.*
 discard/**
 Test.*
 *.dll

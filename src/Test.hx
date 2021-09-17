@@ -1,5 +1,6 @@
 package;
 
+import haxe.compiler.backends.GenPE;
 import peapi.ManifestResource;
 import mono.ilasm.ExternTypeRef;
 import cs.system.collections.ArrayList;
@@ -19,6 +20,30 @@ import mono.ilasm.CodeGen;
 
 class Test {
     public static function main() {
+        testGen();
+        generateHelloWorld();
+    }
+
+    static function testGen() {
+        var module = '
+package test;
+
+class Test {
+    public static function main() {
+        var t = 0.53;
+        trace(t);
+    }
+}
+';
+        var begin = haxe.Timer.stamp();
+        var gen = new GenPE("test.module.exe", false, false, false);
+        gen.setMainClass("test.Test");
+        var parser = new hscript.Parser();
+        var output = gen.buildHscript('Test', parser.parseModule(module));
+        trace('got binaries in ${haxe.Timer.stamp() - begin}s');
+        sys.io.File.saveBytes('./renamed.exe', output);
+    }
+    static function generateHelloWorld() {
         // var action = new cs.system.Action()
         var t = 'test';
         var cg = new CodeGen("test.exe", false, false, false);

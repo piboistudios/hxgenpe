@@ -1,6 +1,7 @@
 -lib hxcs
 -lib hscript
 -lib tink_macro
+-D hscript_debug
 -D hscriptPos
 -lib tink_json
 # --macro Boot.load()
