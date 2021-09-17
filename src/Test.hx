@@ -31,7 +31,8 @@ package test;
 class Test {
     public static function main() {
         var t = 0.53;
-        trace(t);
+        var cond = true;
+        if(cond) for(i in 0...10) trace(t);
     }
 }
 ';
