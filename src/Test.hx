@@ -29,21 +29,23 @@ class Test {
 package test;
 
 class Test {
+    static var t = 0.53;
     public static function main() {
-        var t = 0.53;
         var cond = true;
         if(cond) for(i in 0...10) trace(t);
     }
 }
 ';
+
         var begin = haxe.Timer.stamp();
         var gen = new GenPE("test.module.exe", false, false, false);
         gen.setMainClass("test.Test");
         var parser = new hscript.Parser();
         var output = gen.buildHscript('Test', parser.parseModule(module));
         trace('got binaries in ${haxe.Timer.stamp() - begin}s');
-        sys.io.File.saveBytes('./renamed.exe', output);
+        sys.io.File.saveBytes('./test.module.exe', output);
     }
+
     static function generateHelloWorld() {
         // var action = new cs.system.Action()
         var t = 'test';
@@ -63,12 +65,12 @@ class Test {
         var strType = new mono.ilasm.PrimitiveTypeRef(PrimitiveType.String, "System.String");
         var voidType = new mono.ilasm.PrimitiveTypeRef(PrimitiveType.Void, "System.Void");
         var args:cs.NativeArray<mono.ilasm.BaseTypeRef.BaseTypeRef> = NativeArray.make(cast strType);
-        var methRef  = externRef.GetMethodRef(voidType, peapi.CallConv.Default, "WriteLine", args, 0);
+        var methRef = externRef.GetMethodRef(voidType, peapi.CallConv.Default, "WriteLine", args, 0);
         cg.CurrentMethodDef.AddInstr(new MethodInstr(peapi.MethodOp.call, methRef, new Location(0, 0)));
         cg.CurrentMethodDef.AddInstr(new SimpInstr(peapi.Op.ret, new Location(0, 0)));
         cg.EndMethodDef(new Location(0, 0));
         cg.EndTypeDef();
-        
+
         cg.EndSourceFile();
         cg.AddManifestResource(new ManifestResource("What", NativeArray.make(), ManifestResource.PublicResource));
         cg.Write();

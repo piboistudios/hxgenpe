@@ -1,5 +1,6 @@
 package haxe.compiler.backends;
 
+import hscript.Printer;
 import cs.system.reflection.AssemblyName;
 import cs.NativeArray;
 import mono.ilasm.CatchBlock;
@@ -96,6 +97,7 @@ class GenPE {
     var labelRefCount:Map<String, Int> = [];
     var localRefCount:Map<String, Int> = [];
     var currentPackage = '';
+    var constructorFields:Array<{field:FieldDef, decl:VarDecl}> = [];
     // I guess we shouldn't force dependencies... but for now, this will rely on System.Linq.Expressions.dll
     var useSystemDynamicTypes = true;
     var firstPassComplete = false;
@@ -123,7 +125,11 @@ class GenPE {
         gen.BeginSourceFile('$sourceModule.hscript');
         gen.BeginAssemblyRef("mscorlib", new AssemblyName("mscorlib"), peapi.AssemAttr.Retargetable);
         gen.EndAssemblyRef();
-        gen.SetThisAssembly(sourceModule, peapi.AssemAttr.Retargetable);
+        gen.SetThisAssembly({
+            var l = outputFile.split('.');
+            l.pop();
+            l.join('.');
+        }, peapi.AssemAttr.Retargetable);
         gen.CurrentCustomAttrTarget = gen.ThisAssembly;
         gen.CurrentDeclSecurityTarget = gen.ThisAssembly;
         firstPass(types);
@@ -163,15 +169,19 @@ class GenPE {
                     for (field in c.fields) {
                         switch field.kind {
                             case KFunction(f):
-                                generateMethod(name, field, f);
+                                if (field.name == 'new')
+                                    currentConstructor = {field: field, decl: f};
+                                else
+                                    generateMethod(name, field, f);
+                                null;
                             case KVar(v):
                                 generateVar(name, field, v);
                         }
                     }
+                    generateConstructor();
                     afterType();
                     gen.EndTypeDef();
-        
-        
+
                 default:
             }
     }
@@ -190,6 +200,9 @@ class GenPE {
     function generateMethod(owner:String, field:FieldDecl, f:FunctionDecl) {
         var flags = getClrFlags(field, [cast MethAttr.Public, cast MethAttr.Static, cast MethAttr.Private]);
         flags |= cast MethAttr.HideBySig;
+        if (isSpecialName(field.name))
+            flags |= cast MethAttr.RTSpecialName;
+
         var conv:Int = cast peapi.CallConv.Default;
         if (field.name == 'new') {
             flags |= cast MethAttr.SpecialName;
@@ -210,7 +223,7 @@ class GenPE {
 
         var ret = types.checker.check(f.expr, if (f.ret != null) WithType(types.toTType(f.ret)) else WithType(TVoid));
         var retType = toClrTypeRef(ret);
-        
+
         var ownerType = gen.CurrentTypeDef; // lookupType(owner).toClrTypeDef(this);
         var paramList = new cs.system.collections.ArrayList();
         for (arg in f.args)
@@ -218,7 +231,7 @@ class GenPE {
 
         var genericParameters = null;
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
-        
+
         if (field.name == "main" && owner == mainClass)
             method.EntryPoint();
         method.SetMaxStack(8); // apparently this only matters for PE verification and has nothing to do with runtime
@@ -228,13 +241,12 @@ class GenPE {
         locals = [];
         closure = null;
         mapToClrMethodBody(f.expr, method, ret);
-        if(retType.FullName == "System.Void") {
-            noneInstr(peapi.Op.ret, f.expr.location());   
+        if (retType.FullName == "System.Void") {
+            noneInstr(peapi.Op.ret, f.expr.location());
         }
         if (closure != null)
             beforeNextType.push(() -> defineClosure(closure));
         gen.EndMethodDef(f.expr.location());
-        
     }
 
     function referenceLabel(refName) {
@@ -267,11 +279,12 @@ class GenPE {
         // }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
-
-        var type = toClrTypeRef(if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type));
-        var field = new FieldDef(flags, name, type);
+        var type = if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type);
+        var clrType = toClrTypeRef(type);
+        var field = new FieldDef(flags, name, clrType);
         gen.AddFieldDef(field);
-        deferred.secondWave.push(() -> tryInitField(field, gen.CurrentTypeDef));
+        types.checker.setGlobal(name, type);
+        constructorFields.push({field: field, decl: v});
     }
 
     public function setMainClass(c) {
@@ -363,9 +376,7 @@ class GenPE {
     }
 
     // try to evaluate the field to a constant, if it works, set the value for the CIL member
-    function tryInitField(field:FieldDef, typeDef:TypeDef) {
-        throw new NotImplementedException();
-    }
+    function tryInitField(field:FieldDef, typeDef:TypeDef) {}
 
     // System.Dynamic.DynamicObject or ExpandoObject or whatever? But also, maybe some homegrown type for this?
     function getDynamicTypeRef():BaseTypeRef {
@@ -408,203 +419,206 @@ class GenPE {
             var endIfLabel = placeLabelRef(LabelRefs.END_IF);
         }
         var with = if (withType != null) WithType(withType) else null;
-        function doMap(e:Expr) switch e.expr() {
-            case EIdent('true'): // this should be EConst.CBool(v)...
-                noneInstr(peapi.Op.ldc_i4_1, e.location());
-                after();
-            case EIdent('false'): // this should be EConst.CBool(v)...
-                noneInstr(peapi.Op.ldc_i4_0, e.location());
-                after();
-            case EConst(c):
-                switch c {
-                    case CInt(v):
-                        intInt32Instr(IntOp.ldc_i4_s, v, e.location());
-                    case CFloat(f):
-                        r8Float64Instr(MiscInstr.ldc_r8, f, e.location());
-                    case CString(s):
-                        loadStringInstr(s, e.location());
-                }
-                after();
-            case EVar(n, t, e): // should support an array... e.g. var a,b,c;
-                // technically after should be null at this point.. not sure if should throw
-                types.checker.allowGlobalsDefine = true;
-                var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
-                types.checker.setGlobal(n, type);
-                if (closure == null)
-                    locals.set(n, toClrTypeRef(type));
-                else
-                    closure.locals.set(n, toClrTypeRef(type));
-                mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.toTType(t)), e.location()));
-            case EBlock(e):
-                var from = gen.CurrentMethodDef.AddLabel();
-                gen.CurrentMethodDef.BeginLocalsScope();
-                for (expr in e)
-                    mapToClrMethodBody(expr, method, ret, withType);
-                after();
-                handlerBlock = new HandlerBlock(from, gen.CurrentMethodDef.AddLabel());
-                gen.CurrentMethodDef.EndLocalsScope();
-            case EReturn(e):
-                mapToClrMethodBody(e, method, ret, withType, _after);
-                noneInstr(peapi.Op.ret, e.location());
-            case EIdent(i):
-                handleIdent(i, e.location());
-            case EUnop(op, prefix, e):
-                var type = types.checker.check(e, with);
-                handleUnop(op, prefix, e, type);
-                after();
-            case EBinop(op, e1, e2):
-                var type1 = types.checker.check(e1, with);
-                var type2 = types.checker.check(e2, WithType(type1));
-                handleBinop(op, [e1, e2], [type1, type2]);
-                after();
-            case ECall(e, params):
-                var callerType = types.checker.check(e, with);
-                var paramTypes = [];
-                switch callerType {
-                    case TFun(args, ret):
-                        paramTypes = [
-                            for (i in 0...params.length) {
-                                var arg = params[i];
-                                var argType = args[i].t;
-                                types.checker.check(arg, if (argType != null) WithType(argType) else null);
-                            }
-                        ];
-                    // not sure if the default case is right... I mean, there's callable types in Haxe
-                    // well, until we have abstracts this is impossible anywho
-                    default: /* throw '${printer.exprToString(e)} is not callable (${e.location()})'; */
-                }
-                // i think potentially withType below should be the ret from TFun above..
-                handleCall(e, callerType, params, paramTypes, withType);
-                after();
-            case EIf(cond, e1, e2):
-                doIf(e, cond, e1, e2);
-            case EWhile(cond, e):
-                var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
-                mapToClrMethodBody(cond, method, ret, withType);
-                brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
-                mapToClrMethodBody(e, method, ret, withType);
-                brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
-                noneInstr(peapi.Op.nop, e.location());
-                placeLabelRef(LabelRefs.END_LOOP);
-            case EFor(v, it, e):
-                // handle int in 0...n with a more optimized approach than obj in iterable
-                var loopVar = getLocal(v);
-                gen.CurrentMethodDef.AddLocals({
-                    var locals = new ArrayList();
-                    locals.Add(new Local(-1, loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32")));
-                    locals;
-                });
-                switch it.expr() {
-                    case EBinop('...', hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(min)), hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(max))):
-                        if (closure == null)
-                            locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
-                        else
-                            closure.locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
-                        // TODO: first pass over method body for closures
-                        intInt32Instr(IntOp.ldc_i4, min, it.location());
-                        setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
-                        var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
-                        handleIdent(loopVar, e.location());
-                        intInt32Instr(IntOp.ldc_i4, max, it.location());
-                        brTargetIdInstr(BranchOp.beq, referenceLabel(LabelRefs.END_LOOP), it.location());
-                        mapToClrMethodBody(e, method, ret, withType);
-                        noneInstr(peapi.Op.ldc_i4_1, e.location());
-                        handleIdent(loopVar, e.location());
-                        noneInstr(peapi.Op.add, e.location());
-                        setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
-                        brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
-                        placeLabelRef(LabelRefs.END_LOOP);
-                    default:
-                        // TODO: crap... forgot the checker needs locals loaded to it...
-                        // TODO: crap, forgot again
-                }
-            case EFunction(args, e, name, ret):
-                if (closure == null) {
-                    closure = mkClosure();
-                    closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
-                }
-                e.iter(e -> switch e.expr() {
-                    case EIdent(v):
-                        if (isLocal(v)) {
-                            moveToClosure(v);
-                        }
-                    default:
-                });
-                closure.methods.push({
-                    name: name,
-                    f: {
-                        ret: ret,
-                        args: args,
-                        expr: e
+        function doMap(e:Expr)
+            switch e.expr() {
+                case EIdent('true'): // this should be EConst.CBool(v)...
+                    noneInstr(peapi.Op.ldc_i4_1, e.location());
+                    after();
+                case EIdent('false'): // this should be EConst.CBool(v)...
+                    noneInstr(peapi.Op.ldc_i4_0, e.location());
+                    after();
+                case EConst(c):
+                    switch c {
+                        case CInt(v):
+                            intInt32Instr(IntOp.ldc_i4_s, v, e.location());
+                        case CFloat(f):
+                            r8Float64Instr(MiscInstr.ldc_r8, f, e.location());
+                        case CString(s):
+                            loadStringInstr(s, e.location());
                     }
-                });
-            case EArray(e, index): // array access
-            // if has an indexer decl, do indexer access
-            // e.g. .method public final hidebysig virtual newslot specialname instance !0/*T*/ get_Item
-            // and.method public final hidebysig virtual newslot specialname instance void set_Item
-            // if it doesn't have an indexer decl,
-            // check for Haxe abstract array access override...
-            case EArrayDecl(e): // array declaration
-            // if the types of expressions in the array are the the same type T: create a haxe Array<T>
-            // if the types of expressions in the array are different types: create a haxe Array<Dynamic>
-            // array comprehension... speaking of, TODO: hscript, need EMapDecl(Array<{k:Expr,v:Expr})
-            case ENew(cl, params): // newobj
-            // if it's not an abstract, nothing fancy here
-            // otherwise bang head on keyboard
-            case EThrow(e):
-                var exception:Expr = convertToException(e);
-                mapToClrMethodBody(exception, method, ret);
-                noneInstr(peapi.Op.throwOp, e.location());
-            case ETry(e, v, t, ecatch): // TODO: hscript: catch should be an array....
-                // similar semantics as try/catch in c#
-                if (!e.expr().match(EBlock(_))) {
-                    e.e = EBlock([e]);
-                }
-                if (!ecatch.expr().match(EBlock(_))) {
-                    ecatch.e = EBlock([e]);
-                }
-                var catchType = toClrTypeRef(types.toTType(t));
-                if (closure == null)
-                    locals.set(v, catchType);
-                else
-                    closure.locals.set(v, catchType);
-                mapToClrMethodBody(e, method, ret, withType, _after);
-                brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
-                var tryBlock = new TryBlock(handlerBlock, e.location());
-                mapToClrMethodBody(ecatch, method, ret, withType, _after);
-                brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
-                var cb = new CatchBlock(catchType);
-                cb.SetHandlerBlock(handlerBlock);
-                tryBlock.AddSehClause(cb);
-                gen.CurrentMethodDef.AddInstr(tryBlock);
-                placeLabelRef(LabelRefs.END_TRY);
-            case EObject(fl): // handle this very last...
-            // basically have to create:
-            // - Some helper for Haxe runtime callsite bindings
-            // - haxe.lang.DynamicObject (which needs to contain a reference to the underlying object and also not be derived from haxe.lang.HxObject)
-            // - And also I guess anons or something should be derived from that..
-            // and we should be able to optimize callsite bindings for anons/typedefs since we know the fields up front..
-            // unlike c# dynamics
-            // though haxe Dynamics will work pretty much just like c# ones
-            case ETernary(cond, e1, e2): doIf(e, cond, e1, e2);
-            case ESwitch(e, cases, defaultExpr):
-            // god this is going to be fun.. pattern matching
-            // for anons/typedefs, the subject of the switch needs to be converted to
-            case EDoWhile(cond, e):
-                var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
-                mapToClrMethodBody(e, method, ret, withType);
-                mapToClrMethodBody(cond, method, ret, withType);
-                brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
-                brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
-                noneInstr(peapi.Op.nop, e.location());
-                placeLabelRef(LabelRefs.END_LOOP);
-            case EMeta(name, args, e):
-                meta = {name: name, args: args, expr: e};
-                mapToClrMethodBody(e, method, ret, withType, _after);
-            case ECheckType(e, t): // or not
-                mapToClrMethodBody(e, method, ret, types.toTType(t), _after);
-            default:
-        }
+                    after();
+                case EVar(n, t, e): // should support an array... e.g. var a,b,c;
+                    // technically after should be null at this point.. not sure if should throw
+                    types.checker.allowGlobalsDefine = true;
+                    var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
+                    types.checker.setGlobal(n, type);
+                    if (closure == null)
+                        locals.set(n, toClrTypeRef(type));
+                    else
+                        closure.locals.set(n, toClrTypeRef(type));
+                    mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.toTType(t)), e.location()));
+                case EBlock(e):
+                    var from = gen.CurrentMethodDef.AddLabel();
+                    gen.CurrentMethodDef.BeginLocalsScope();
+                    for (expr in e)
+                        mapToClrMethodBody(expr, method, ret, withType);
+                    after();
+                    handlerBlock = new HandlerBlock(from, gen.CurrentMethodDef.AddLabel());
+                    gen.CurrentMethodDef.EndLocalsScope();
+                case EReturn(e):
+                    mapToClrMethodBody(e, method, ret, withType, _after);
+                    noneInstr(peapi.Op.ret, e.location());
+                case EIdent(i):
+                    handleIdent(i, e.location());
+                case EUnop(op, prefix, e):
+                    var type = types.checker.check(e, with);
+                    handleUnop(op, prefix, e, type);
+                    after();
+                case EBinop(op, e1, e2):
+                    var type1 = types.checker.check(e1, with);
+                    var type2 = types.checker.check(e2, WithType(type1));
+                    handleBinop(op, [e1, e2], [type1, type2]);
+                    after();
+                case ECall(e, params):
+                    var callerType = types.checker.check(e, with);
+                    var paramTypes = [];
+                    switch callerType {
+                        case TFun(args, ret):
+                            paramTypes = [
+                                for (i in 0...params.length) {
+                                    var arg = params[i];
+                                    var argType = args[i].t;
+                                    types.checker.check(arg, if (argType != null) WithType(argType) else null);
+                                }
+                            ];
+                        // not sure if the default case is right... I mean, there's callable types in Haxe
+                        // well, until we have abstracts this is impossible anywho
+                        default: /* throw '${printer.exprToString(e)} is not callable (${e.location()})'; */
+                    }
+                    // i think potentially withType below should be the ret from TFun above..
+                    handleCall(e, callerType, params, paramTypes, withType);
+                    after();
+                case EIf(cond, e1, e2):
+                    doIf(e, cond, e1, e2);
+                case EWhile(cond, e):
+                    var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
+                    mapToClrMethodBody(cond, method, ret, withType);
+                    brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
+                    mapToClrMethodBody(e, method, ret, withType);
+                    brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
+                    noneInstr(peapi.Op.nop, e.location());
+                    placeLabelRef(LabelRefs.END_LOOP);
+                case EFor(v, it, e):
+                    // handle int in 0...n with a more optimized approach than obj in iterable
+                    var loopVar = getLocal(v);
+                    gen.CurrentMethodDef.AddLocals({
+                        var locals = new ArrayList();
+                        locals.Add(new Local(-1, loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32")));
+                        locals;
+                    });
+                    switch it.expr() {
+                        case EBinop('...', hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(min)),
+                            hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(max))):
+                            if (closure == null)
+                                locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
+                            else
+                                closure.locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
+                            // TODO: first pass over method body for closures
+                            intInt32Instr(IntOp.ldc_i4, min, it.location());
+                            setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
+                            var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
+                            handleIdent(loopVar, e.location());
+                            intInt32Instr(IntOp.ldc_i4, max, it.location());
+                            brTargetIdInstr(BranchOp.beq, referenceLabel(LabelRefs.END_LOOP), it.location());
+                            mapToClrMethodBody(e, method, ret, withType);
+                            noneInstr(peapi.Op.ldc_i4_1, e.location());
+                            handleIdent(loopVar, e.location());
+                            noneInstr(peapi.Op.add, e.location());
+                            setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
+                            brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
+                            placeLabelRef(LabelRefs.END_LOOP);
+                        default:
+                            // TODO: crap... forgot the checker needs locals loaded to it...
+                            // TODO: crap, forgot again
+                    }
+                case EFunction(args, e, name, ret):
+                    if (closure == null) {
+                        closure = mkClosure();
+                        closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
+                    }
+                    e.iter(e -> switch e.expr() {
+                        case EIdent(v):
+                            if (isLocal(v)) {
+                                moveToClosure(v);
+                            }
+                        default:
+                    });
+                    closure.methods.push({
+                        name: name,
+                        f: {
+                            ret: ret,
+                            args: args,
+                            expr: e
+                        }
+                    });
+                case EArray(e, index): // array access
+                // if has an indexer decl, do indexer access
+                // e.g. .method public final hidebysig virtual newslot specialname instance !0/*T*/ get_Item
+                // and.method public final hidebysig virtual newslot specialname instance void set_Item
+                // if it doesn't have an indexer decl,
+                // check for Haxe abstract array access override...
+                case EArrayDecl(e): // array declaration
+                // if the types of expressions in the array are the the same type T: create a haxe Array<T>
+                // if the types of expressions in the array are different types: create a haxe Array<Dynamic>
+                // array comprehension... speaking of, TODO: hscript, need EMapDecl(Array<{k:Expr,v:Expr})
+                case ENew(cl, params): // newobj
+                // if it's not an abstract, nothing fancy here
+                // otherwise bang head on keyboard
+                case EThrow(e):
+                    var exception:Expr = convertToException(e);
+                    mapToClrMethodBody(exception, method, ret);
+                    noneInstr(peapi.Op.throwOp, e.location());
+                case ETry(e, v, t, ecatch): // TODO: hscript: catch should be an array....
+                    // similar semantics as try/catch in c#
+                    if (!e.expr().match(EBlock(_))) {
+                        e.e = EBlock([e]);
+                    }
+                    if (!ecatch.expr().match(EBlock(_))) {
+                        ecatch.e = EBlock([e]);
+                    }
+                    var catchType = toClrTypeRef(types.toTType(t));
+                    if (closure == null)
+                        locals.set(v, catchType);
+                    else
+                        closure.locals.set(v, catchType);
+                    mapToClrMethodBody(e, method, ret, withType, _after);
+                    brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
+                    var tryBlock = new TryBlock(handlerBlock, e.location());
+                    mapToClrMethodBody(ecatch, method, ret, withType, _after);
+                    brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
+                    var cb = new CatchBlock(catchType);
+                    cb.SetHandlerBlock(handlerBlock);
+                    tryBlock.AddSehClause(cb);
+                    gen.CurrentMethodDef.AddInstr(tryBlock);
+                    placeLabelRef(LabelRefs.END_TRY);
+                case EObject(fl): // handle this very last...
+                // basically have to create:
+                // - Some helper for Haxe runtime callsite bindings
+                // - haxe.lang.DynamicObject (which needs to contain a reference to the underlying object and also not be derived from haxe.lang.HxObject)
+                // - And also I guess anons or something should be derived from that..
+                // and we should be able to optimize callsite bindings for anons/typedefs since we know the fields up front..
+                // unlike c# dynamics
+                // though haxe Dynamics will work pretty much just like c# ones
+                case ETernary(cond, e1, e2):
+                    doIf(e, cond, e1, e2);
+                case ESwitch(e, cases, defaultExpr):
+                // god this is going to be fun.. pattern matching
+                // for anons/typedefs, the subject of the switch needs to be converted to
+                case EDoWhile(cond, e):
+                    var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
+                    mapToClrMethodBody(e, method, ret, withType);
+                    mapToClrMethodBody(cond, method, ret, withType);
+                    brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
+                    brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
+                    noneInstr(peapi.Op.nop, e.location());
+                    placeLabelRef(LabelRefs.END_LOOP);
+                case EMeta(name, args, e):
+                    meta = {name: name, args: args, expr: e};
+                    mapToClrMethodBody(e, method, ret, withType, _after);
+                case ECheckType(e, t): // or not
+                    mapToClrMethodBody(e, method, ret, types.toTType(t), _after);
+                default:
+            }
         doMap(expr);
     }
 
@@ -730,7 +744,7 @@ class GenPE {
         switch e.expr() {
             case EIdent('trace'):
                 // just a quick hack to make trace do console log with one arg...
-                    // don't blame me I want to test FFS
+                // don't blame me I want to test FFS
                 var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
                     .GetMethodRef(new PrimitiveTypeRef(PrimitiveType.Void, "System.Void"), CallConv.Default, "WriteLine",
                         NativeArray.make((toClrTypeRef(types.checker.check(params[0])) : BaseTypeRef)), 0);
@@ -784,7 +798,61 @@ class GenPE {
     function convertToException(e:Expr):Expr {
         throw new haxe.exceptions.NotImplementedException();
     }
+
+    function generateConstructor() {
+        var constructor:MethodDecl = if (currentConstructor == null) {
+            var decl:FunctionDecl = {
+                ret: null,
+                expr: EBlock([]).mk({
+                    e: null,
+                    pmin: 0,
+                    pmax: 0,
+                    origin: null,
+                    line: 0
+                }),
+                args: []
+            };
+            {
+                field: {
+                    name: 'new',
+                    meta: [],
+                    kind: KFunction(decl),
+                    access: [APrivate]
+                },
+                decl: decl
+            };
+        } else currentConstructor;
+        function mk(c:Expr)
+            return switch c.expr() {
+                case EBlock(exprs):
+                    for (field in constructorFields) {
+                        var fieldReference = 'this.${field.field.Name}';
+
+                        exprs.unshift(EBinop('=', EIdent('$fieldReference').mk(c), field.decl.expr).mk(c));
+                    }
+                    EBlock(exprs).mk(c);
+                case v: mk(EBlock([c]).mk(c));
+            }
+        constructor.decl.expr = mk(constructor.decl.expr);
+        constructor.field.name = '.ctor';
+        trace(new Printer().exprToString(constructor.decl.expr));
+        generateMethod('', constructor.field, constructor.decl);
+        constructorFields = [];
+    }
+
+    var currentConstructor:MethodDecl;
+
+    // @formatter:off
+    static var specialNames = [
+        '.ctor',            // CONSTRUCTOR
+        '.cctor'            // CLASS CONSTRUCTOR
+    ];
+    // @formatter:on
+    function isSpecialName(arg0:String)
+        return specialNames.contains(arg0);
 }
+
+typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
 
 class ClrMethodDefTools {
     public static function op(method:MethodDef, op, operand, loc)
