@@ -375,9 +375,6 @@ class GenPE extends Gen {
         return cast flags;
     }
 
-    // try to evaluate the field to a constant, if it works, set the value for the CIL member
-    function tryInitField(field:FieldDef, typeDef:TypeDef) {}
-
     // System.Dynamic.DynamicObject or ExpandoObject or whatever? But also, maybe some homegrown type for this?
     function getDynamicTypeRef():BaseTypeRef {
         throw new NotImplementedException();
