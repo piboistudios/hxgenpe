@@ -1,62 +1,9 @@
-package hscript;
-
+package haxe.compiler.backends.pe;
 import hscript.Checker;
 import hscript.Expr;
 
 using Lambda;
-using hscript.PECheckerTypes;
 
-class CheckerBase implements CheckerTypes {
-    var types:Map<String, CTypedecl> = new Map();
-
-    public var checker:Checker;
-
-    var localParams:Map<String, TType>;
-
-    public function resolve(name:String, ?args:Array<TType>):TType {
-        if (name == "Null") {
-            if (args == null || args.length != 1)
-                throw "Missing Null<T> parameter";
-            return TNull(args[0]);
-        }
-        var t = types.get(name);
-        if (t == null)
-            return null;
-        if (args == null)
-            args = [];
-        return switch (t) {
-            case CTClass(c): TInst(c, args);
-            case CTEnum(e): TEnum(e, args);
-            case CTTypedef(t): TType(t, args);
-            case CTAbstract(a): TAbstract(a, args);
-            case CTAlias(t): t;
-        }
-    }
-
-    public function getType(name:String, ?args:Array<TType>):TType {
-        if (localParams != null) {
-            var t = localParams.get(name);
-            if (t != null)
-                return t;
-        }
-        var t = resolve(name, args);
-        if (t == null) {
-            var pack = name.split(".");
-            if (pack.length > 1) {
-                // bugfix for some args reported as pack._Name.Name while they are not private
-                var priv = pack[pack.length - 2];
-                if (priv.charCodeAt(0) == "_".code) {
-                    pack.remove(priv);
-                    return getType(pack.join("."), args);
-                }
-            }
-            return TUnresolved(name); // most likely private class
-        }
-        return t;
-    }
-
-    public var t_string:TType;
-}
 
 class PECheckerTypes extends CheckerBase {
     var typeAssemblies:Map<String, String> = new Map();
@@ -66,11 +13,11 @@ class PECheckerTypes extends CheckerBase {
         t_string = TDynamic;
     }
 
-    public function setPack(pk) {
+    public override function setPack(pk) {
         currentPack = pk;
     }
 
-    public function addType(decl:ModuleDecl) {
+    public override function addType(decl:ModuleDecl) {
         var name = currentPack;
         var type:CTypedecl = switch decl {
             case DClass(c):
@@ -111,7 +58,7 @@ class PECheckerTypes extends CheckerBase {
     public function getAssembly(type:String):String
         return typeAssemblies[type];
 
-    public function toTType(t:CType):TType
+    public override function toTType(t:CType):TType
         return if (t == null) TVoid else switch t {
             case CTPath(pack, params):
                 resolve(pack.join('.'), [for (param in params) toTType(param)]);
@@ -162,7 +109,7 @@ class PECheckerTypes extends CheckerBase {
 
     function addDeclAssembly(d:ClassDecl) {
         if (d.isExtern) {
-            var assemblyMeta = d.meta.array().find(m -> m.name == "netLib");
+            var assemblyMeta = d.meta.find(m -> m.name == "netLib");
             if (assemblyMeta.params[0].e.match(EConst(CString(_)))) {
                 var const:hscript.Expr.Const = assemblyMeta.params[0].e.getParameters()[0];
                 var assemblyName = const.getParameters()[0];

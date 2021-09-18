@@ -1,6 +1,6 @@
 package;
 
-import haxe.compiler.backends.GenPE;
+import haxe.compiler.backends.pe.GenPE;
 import peapi.ManifestResource;
 import mono.ilasm.ExternTypeRef;
 import cs.system.collections.ArrayList;

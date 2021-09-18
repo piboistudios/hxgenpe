@@ -1,5 +1,6 @@
-package haxe.compiler.backends;
+package haxe.compiler.backends.pe;
 
+import haxe.compiler.backends.Core.Gen;
 import hscript.Printer;
 import cs.system.reflection.AssemblyName;
 import cs.NativeArray;
@@ -46,7 +47,6 @@ using hscript.Tools;
 
 import hscript.Interp;
 import hscript.Checker.TType;
-import hscript.PECheckerTypes;
 import haxe.io.Bytes;
 import hscript.Checker.CheckerTypes;
 import cs.StdTypes.UInt8;
@@ -75,13 +75,13 @@ import mono.ilasm.CodeGen;
 
 using Lambda;
 using StringTools;
-using haxe.compiler.backends.GenPE;
+using haxe.compiler.backends.pe.GenPE;
 
 typedef Deferred = Array<Void->Void>;
 
-class GenPE {
+class GenPE extends Gen {
     public var gen:CodeGen;
-    public var types:PECheckerTypes;
+    public var types:GenCheckerTypes;
 
     static var COMPILER_GENERATED_PREFIX = "<>_";
 
