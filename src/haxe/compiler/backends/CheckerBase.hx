@@ -1,5 +1,7 @@
 package haxe.compiler.backends;
 
+import mono.ilasm.BaseClassRef;
+
 class CheckerBase implements GenCheckerTypes {
     var types:Map<String, CTypedecl> = new Map();
 

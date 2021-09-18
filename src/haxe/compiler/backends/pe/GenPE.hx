@@ -81,7 +81,7 @@ typedef Deferred = Array<Void->Void>;
 
 class GenPE extends Gen {
     public var gen:CodeGen;
-    public var types:GenCheckerTypes;
+    public var peTypes:PECheckerTypes;
 
     static var COMPILER_GENERATED_PREFIX = "<>_";
 
@@ -111,7 +111,7 @@ class GenPE extends Gen {
     public function new(outputFile, isDll, debuggingInfo, autoInherit) {
         this.gen = new CodeGen(outputFile, isDll, debuggingInfo, autoInherit);
         this.outputFile = outputFile;
-        this.types = new PECheckerTypes();
+        this.types = this.peTypes = new PECheckerTypes();
         this.types.checker = new hscript.Checker(this.types);
     }
 
@@ -132,6 +132,7 @@ class GenPE extends Gen {
         }, peapi.AssemAttr.Retargetable);
         gen.CurrentCustomAttrTarget = gen.ThisAssembly;
         gen.CurrentDeclSecurityTarget = gen.ThisAssembly;
+        init();
         firstPass(types);
         secondPass(types);
         finalPass(types);
@@ -303,14 +304,15 @@ class GenPE extends Gen {
     }
 
     function clrApply(e:BaseClassRef, types:Array<TType>)
-        return e.GetGenericTypeInst({
+        return if (types == null || types.length == 0) e else e.GetGenericTypeInst({
             var args = new GenericArguments();
             for (t in types)
                 args.Add(toClrTypeRef(t));
             args;
         });
 
-    function toClrTypeRef(t:TType):BaseTypeRef
+    function toClrTypeRef(t:TType):BaseTypeRef {
+        trace(t);
         return // this of course can only be called after the first pass
             if (!firstPassComplete) throw 'First pass incomplete; cannot convert types'; else switch types.checker.follow(t) {
                 case TMono({r: null}): new PrimitiveTypeRef(PrimitiveType.Void, "System.Void");
@@ -320,10 +322,10 @@ class GenPE extends Gen {
                 case TBool: new PrimitiveTypeRef(PrimitiveType.Boolean, "System.Boolean");
                 case TDynamic: getDynamicTypeRef();
                 case TAbstract(a, args): toClrTypeRef(types.checker.apply(a.t, a.params, args));
-                case TInst(c, args): clrApply(gen.GetTypeRef(c.name), args);
-                case TNull(t): clrApply(gen.ExternTable.GetTypeRef("mscorlib.dll", "System.Nullable", false), [t]);
-                case TEnum(e, args): clrApply(gen.GetTypeRef(e.name), args);
-                case TType(t, args): clrApply(gen.GetTypeRef(t.name), args);
+                case TInst(c, args): clrApply(getTypeRef(c.name), args);
+                case TNull(t): clrApply(gen.ExternTable.GetTypeRef("mscorlib", "System.Nullable", false), [t]);
+                case TEnum(e, args): clrApply(getTypeRef(e.name), args);
+                case TType(t, args): clrApply(getTypeRef(t.name), args);
                 case TFun(args, ret): clrApply(getFunctionTypeRef(args, ret), [for (arg in args) arg.t]); // These need to capture generics?
                 case TAnon(fields): getDynamicTypeRef();
                 default:
@@ -354,6 +356,7 @@ class GenPE extends Gen {
                      */
                     throw new NotImplementedException();
             }
+    }
 
     /**
      * Gets the CLR flags for a hscript field decl
@@ -742,9 +745,13 @@ class GenPE extends Gen {
             case EIdent('trace'):
                 // just a quick hack to make trace do console log with one arg...
                 // don't blame me I want to test FFS
+                var type = types.checker.check(params[0]);
+                trace(type);
+                var argType = toClrTypeRef(type);
+                trace(argType);
                 var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
                     .GetMethodRef(new PrimitiveTypeRef(PrimitiveType.Void, "System.Void"), CallConv.Default, "WriteLine",
-                        NativeArray.make((toClrTypeRef(types.checker.check(params[0])) : BaseTypeRef)), 0);
+                        NativeArray.make((argType : BaseTypeRef)), 0);
                 callInstr(CallConv.Default, methodRef, e.location());
                 trace('?w0t');
             default:
@@ -847,6 +854,51 @@ class GenPE extends Gen {
     // @formatter:on
     function isSpecialName(arg0:String)
         return specialNames.contains(arg0);
+
+    // @formatter:off
+    static var valueTypes = [
+        // "System.String", // I think? actually its not, a Char is though
+        "System.Int64",
+        "System.Int32",
+        "System.Boolean",
+        "System.Single",
+        "System.Double",
+        "System.Int16",
+        "System.Char",
+        "System.Byte",
+    ];
+    // @formatter:on
+    function isValueType(type:String)
+        return valueTypes.contains(type);
+
+    function getTypeRef(arg0:String):BaseClassRef {
+        var asm = peTypes.getAssembly(arg0);
+        var valueType = isValueType(arg0);
+        return if (asm != null) gen.ExternTable.GetTypeRef(asm, arg0, valueType); else gen.GetTypeRef(arg0);
+    }
+
+    function init() {
+        types.addType(DClass({
+            name: "System.String",
+            params: [],
+            fields: [],
+            meta: [
+                {name: "netLib", params: [
+                    EConst(CString("mscorlib")).mk({
+                        pmin: 0,
+                        pmax: 0,
+                        origin: null,
+                        line: 0,
+                        e: null
+                    })
+                ]}
+            ],
+            isExtern: true,
+            isPrivate: false,
+            extend: null,
+            implement: null
+        }));
+    }
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};

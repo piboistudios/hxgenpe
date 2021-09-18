@@ -1,7 +1,7 @@
 package haxe.compiler.backends.pe;
 import hscript.Checker;
 import hscript.Expr;
-
+using hscript.Tools;
 using Lambda;
 
 
@@ -10,12 +10,18 @@ class PECheckerTypes extends CheckerBase {
     var currentPack = '';
 
     public function new() {
-        t_string = TDynamic;
+        t_string = TInst({
+            name: "System.String",
+            statics: [],
+            params: [],
+            fields: []
+        },[]);
     }
 
     public override function setPack(pk) {
         currentPack = pk;
     }
+    
 
     public override function addType(decl:ModuleDecl) {
         var name = currentPack;
@@ -111,7 +117,7 @@ class PECheckerTypes extends CheckerBase {
         if (d.isExtern) {
             var assemblyMeta = d.meta.find(m -> m.name == "netLib");
             if (assemblyMeta.params[0].e.match(EConst(CString(_)))) {
-                var const:hscript.Expr.Const = assemblyMeta.params[0].e.getParameters()[0];
+                var const:hscript.Expr.Const = assemblyMeta.params[0].expr().getParameters()[0];
                 var assemblyName = const.getParameters()[0];
                 typeAssemblies[d.name] = assemblyName;
             }
