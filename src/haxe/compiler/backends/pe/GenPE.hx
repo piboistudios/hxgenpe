@@ -602,8 +602,8 @@ class GenPE extends Gen {
                     }
                     var catchType = toClrTypeRef(types.toTType(t));
                     var catchType = toClrTypeRef(types.toTType(t));
-                    mapToClrMethodBody(e, method, ret, withType, _after);
-                    brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
+                    mapToClrMethodBody(e, method, ret, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
+                    
                     var tryBlock = new TryBlock(handlerBlock, e.location());
                     mapToClrMethodBody(ecatch, method, ret, withType, _after);
                     brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
