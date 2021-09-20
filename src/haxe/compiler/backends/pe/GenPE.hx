@@ -89,7 +89,6 @@ class GenPE extends Gen {
     var beforeNextType:Array<Void->Void> = [];
     var closure:Closure;
     var dynamicCallSites:Array<Dynamic>; // not sure what info this will need just yet but.. need to record it for dynamics
-    var printer = new hscript.Printer();
     var next:() -> Void;
     var meta:{name:String, args:Array<Expr>, expr:Expr};
 
@@ -769,7 +768,7 @@ class GenPE extends Gen {
                 mapToClrMethodBody(e, gen.CurrentMethodDef, null);
                 noneInstr(peapi.Op.not, e.location());
             default:
-                throw 'invalid unary operator: $op (near ${new Printer().exprToString(e)})';
+                throw 'invalid unary operator: $op (near ${printer.exprToString(e)})';
         }
     }
 
@@ -832,7 +831,6 @@ class GenPE extends Gen {
                 var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
                     .GetMethodRef(Primitives.VOID, CallConv.Default, "WriteLine", NativeArray.make((argType : BaseTypeRef)), 0);
                 callInstr(CallConv.Default, methodRef, e.location());
-                trace('?w0t');
             default:
                 trace(e);
         }
@@ -931,7 +929,7 @@ class GenPE extends Gen {
             }
         constructor.decl.expr = mk(constructor.decl.expr);
         constructor.field.name = '.ctor';
-        trace(new Printer().exprToString(constructor.decl.expr));
+        trace(printer.exprToString(constructor.decl.expr));
         generateMethod('', constructor.field, constructor.decl);
         constructorFields = [];
     }

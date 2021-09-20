@@ -7,3 +7,4 @@ discard.*
 discard/**
 Test.*
 *.dll
+notes/**
