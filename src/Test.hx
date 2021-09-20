@@ -34,8 +34,8 @@ class Test {
         var cond = true;
         try {
             if(cond) for(i in 0...10) trace(i++);
-        } catch(e:System.String) {
-            trace("Fail");
+        } catch(e:System.Exception) {
+            trace(e);
         }
     }
 }

@@ -385,7 +385,7 @@ class GenPE extends Gen {
     }
 
     // da meat
-    function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void) {
+    function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
         inline function doNext(?done)
             if (next != null) {
                 next();
@@ -395,6 +395,9 @@ class GenPE extends Gen {
         inline function after()
             if (_after != null)
                 _after();
+        inline function before()
+            if(_before != null)
+                _before();
         inline function doIf(e:Expr, cond:Expr, e1:Expr, e2:Null<Expr>) {
             // var branchEnd:LabelInfo = null;
             mapToClrMethodBody(cond, method, ret, withType);
@@ -484,6 +487,7 @@ class GenPE extends Gen {
                 case EBlock(e):
                     var from = gen.CurrentMethodDef.AddLabel();
                     gen.CurrentMethodDef.BeginLocalsScope();
+                    before();
                     for (expr in e)
                         mapToClrMethodBody(expr, method, ret, withType);
                     after();
@@ -601,11 +605,10 @@ class GenPE extends Gen {
                         ecatch.e = EBlock([e]);
                     }
                     var catchType = toClrTypeRef(types.toTType(t));
-                    var catchType = toClrTypeRef(types.toTType(t));
                     mapToClrMethodBody(e, method, ret, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
                     
                     var tryBlock = new TryBlock(handlerBlock, e.location());
-                    mapToClrMethodBody(ecatch, method, ret, withType, _after);
+                    mapToClrMethodBody(ecatch, method, ret, withType, _after, () -> setVar(v, catchType, ecatch.location()));
                     brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
                     var cb = new CatchBlock(catchType);
                     cb.SetHandlerBlock(handlerBlock);
@@ -967,15 +970,19 @@ class GenPE extends Gen {
     }
 
     function init() {
+        addExternClass("System.String", "mscorlib");
+        addExternClass("System.Exception", "mscorlib");
+    }
+    inline function addExternClass(c, asm) {
         types.addType(DClass({
-            name: "System.String",
+            name: c,
             params: [],
             fields: [],
             meta: [
                 {
                     name: "netLib",
                     params: [
-                        EConst(CString("mscorlib")).mk({
+                        EConst(CString(asm)).mk({
                             pmin: 0,
                             pmax: 0,
                             origin: null,
