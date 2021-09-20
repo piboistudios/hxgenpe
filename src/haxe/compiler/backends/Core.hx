@@ -25,11 +25,15 @@ class Gen {
     // public var abstractMapping:Map<AbstractDecl, AbstractInfo> = [];
     // function mapAbstract(a:AbstractDecl) {
     // }
+
+
+    // wait I'm an idiot this should deal resolve declarations not types...
     function resolveMethod(e:Expr, params:Array<Expr>):{
         ?caller:{type:TType, expr:Expr},
         field:{
             name:String,
             t:TType,
+            params:Array<TType>,
             kind:FunctionKind
         }
     } {
@@ -69,7 +73,8 @@ class Gen {
                         field: {
                             name: "<>closure",
                             t: functionType,
-                            kind: Closure
+                            kind: Closure,
+                            params: []
                         }
                     }
                 default: throw 'Invalid call expression';

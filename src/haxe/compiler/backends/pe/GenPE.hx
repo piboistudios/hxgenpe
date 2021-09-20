@@ -831,12 +831,14 @@ class GenPE extends Gen {
             case Closure: // probably use function pointers...
             case InstanceMethod|StaticMethod: // probably need more kinds... 
                             // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
-                var callConv = if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
+                var callConv:Int = 0;
+                callConv |= cast if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
                 var callerClrType = toClrTypeRef(method.caller.type);
                 var retClrType = toClrTypeRef(ret);
                 var genParamCount = 0;
+                if(genParamCount != 0) callConv |= cast CallConv.Generic;
                 var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
-                var methRef = callerClrType.GetMethodRef(retClrType, callConv, method.field.name, clrParamTypes, genParamCount);
+                var methRef = callerClrType.GetMethodRef(retClrType,cast  callConv, method.field.name, clrParamTypes, genParamCount);
                 methodInstr(MethodOp.call, methRef, e.location());
             case Module:
         }
