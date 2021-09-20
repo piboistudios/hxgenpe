@@ -10,7 +10,12 @@ typedef AbstractInfo = {
     var fromConversions:Array<FieldDecl>;
     var args:Array<TType>;
 };
-
+enum FunctionKind {
+    Closure;
+    InstanceMethod;
+    StaticMethod;
+    Module;
+}
 // TODO: hscript add parsing of abstracts
 class Gen {
     public var types:GenCheckerTypes;
@@ -21,10 +26,11 @@ class Gen {
     // function mapAbstract(a:AbstractDecl) {
     // }
     function resolveMethod(e:Expr, params:Array<Expr>):{
-        ?callerType:TType,
+        ?caller:{type:TType, expr:Expr},
         field:{
             name:String,
-            t:TType
+            t:TType,
+            kind:FunctionKind
         }
     } {
         var caller:Expr = null;
@@ -61,22 +67,33 @@ class Gen {
                 case TFun(args, ret):
                     return {
                         field: {
-                            name: "closure",
-                            t: functionType
+                            name: "<>closure",
+                            t: functionType,
+                            kind: Closure
                         }
                     }
                 default: throw 'Invalid call expression';
             }
         } else {
-            var method:{name:String, t:TType} = switch callerType {
+            var isStatic = false;
+            var method:Dynamic = switch callerType {
                 case TAnon(fields):
                     fields.find(findMethod);
                 case TInst(c, args):
-                    c.fields.find(findMethod);
+                    var ret = c.fields.find(findMethod);
+                    if(ret == null) {
+                        ret = c.statics.find(findMethod);
+                        if(ret != null) isStatic = true;
+                    }
+                    ret;
                 default: throw 'Unable to resolve function ${printer.exprToString(e)} with params (${paramTypes.map(p -> Checker.typeStr(p)).join(', ')}})';
             }
+            method.kind = if(isStatic) StaticMethod else InstanceMethod;
             return {
-                callerType: callerType,
+                caller: {
+                    type: callerType,
+                    expr: caller
+                },
                 field: method
             }
         }

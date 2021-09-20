@@ -509,23 +509,9 @@ class GenPE extends Gen {
                     after();
                     doNext();
                 case ECall(e, params):
-                    var callerType = types.checker.check(e, with);
-                    var paramTypes = [];
-                    switch callerType {
-                        case TFun(args, ret):
-                            paramTypes = [
-                                for (i in 0...params.length) {
-                                    var arg = params[i];
-                                    var argType = args[i].t;
-                                    types.checker.check(arg, if (argType != null) WithType(argType) else null);
-                                }
-                            ];
-                        // not sure if the default case is right... I mean, there's callable types in Haxe
-                        // well, until we have abstracts this is impossible anywho
-                        default: /* throw '${printer.exprToString(e)} is not callable (${e.location()})'; */
-                    }
+                    var funcType = types.checker.check(e, with);
                     // i think potentially withType below should be the ret from TFun above..
-                    handleCall(e, callerType, params, paramTypes, withType);
+                    handleCall(e, funcType, params, withType);
                     after();
                 case EIf(cond, e1, e2):
                     doIf(e, cond, e1, e2);
@@ -816,24 +802,61 @@ class GenPE extends Gen {
 
     function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
 
-    function handleCall(e:Expr, callerType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType) {
-        for (param in params) {
-            mapToClrMethodBody(param, gen.CurrentMethodDef, null);
+    function handleCall(e:Expr, funcType:TType, params:Array<Expr>, retType) {
+        // 1. Resolve the method to be called
+        // 2. Put the parameters on the stack, and perform conversions as necessary
+        // 3. Handle calling convention (generic, native, standard, virtual)
+        var method = resolveMethod(e, params);
+        var args = [];
+        var ret = null;
+        switch method.field.t {
+            case TFun(a, r):
+                args = a;
+                ret = r;
+                
+            default: throw 'invalid function type ${Checker.typeStr(method.field.t)}';
         }
-        switch e.expr() {
-            case EIdent('trace'):
-                // just a quick hack to make trace do console log with one arg...
-                // don't blame me I want to test FFS
-                var type = types.checker.check(params[0]);
-                trace(type);
-                var argType = toClrTypeRef(type);
-                trace(argType);
-                var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
-                    .GetMethodRef(Primitives.VOID, CallConv.Default, "WriteLine", NativeArray.make((argType : BaseTypeRef)), 0);
-                callInstr(CallConv.Default, methodRef, e.location());
-            default:
-                trace(e);
+        if(method.caller != null && method.field.kind != StaticMethod) {
+            mapToClrMethodBody(method.caller.expr, gen.CurrentMethodDef, null, method.caller.type);
         }
+        for(i in 0...params.length) {
+            var param = params[i];
+            var arg = args[i];
+            var argType = arg.t;
+            params[i] = doConversion(param,argType);
+            mapToClrMethodBody(params[i], gen.CurrentMethodDef, ret, argType);
+        }
+        
+        switch method.field.kind {
+            case Closure: // probably use function pointers...
+            case InstanceMethod|StaticMethod: // probably need more kinds... 
+                            // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
+                var callConv = if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
+                var callerClrType = toClrTypeRef(method.caller.type);
+                var retClrType = toClrTypeRef(ret);
+                var genParamCount = 0;
+                var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
+                var methRef = callerClrType.GetMethodRef(retClrType, callConv, method.field.name, clrParamTypes, genParamCount);
+                methodInstr(MethodOp.call, methRef, e.location());
+            case Module:
+        }
+        // for (param in params) {
+        //     mapToClrMethodBody(param, gen.CurrentMethodDef, null);
+        // }
+        // switch e.expr() {
+        //     case EIdent('trace'):
+        //         // just a quick hack to make trace do console log with one arg...
+        //         // don't blame me I want to test FFS
+        //         var type = types.checker.check(params[0]);
+        //         trace(type);
+        //         var argType = toClrTypeRef(type);
+        //         trace(argType);
+        //         var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
+        //             .GetMethodRef(Primitives.VOID, CallConv.Default, "WriteLine", NativeArray.make((argType : BaseTypeRef)), 0);
+        //         callInstr(CallConv.Default, methodRef, e.location());
+        //     default:
+        //         trace(e);
+        // }
     }
 
     // so, to reference a field in CLR, you need to know if
@@ -1033,6 +1056,10 @@ class GenPE extends Gen {
             arrList;
         });
     }
+    // check if conversion is necessary, and if so, perform it
+	function doConversion(param:Expr, argType:TType):Expr {
+		throw new haxe.exceptions.NotImplementedException();
+	}
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
