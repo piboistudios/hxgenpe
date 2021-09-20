@@ -39,8 +39,6 @@ import mono.ilasm.GenericArguments;
 import haxe.exceptions.NotImplementedException;
 import mono.ilasm.BaseGenericTypeRef;
 import cs.system.reflection.SignatureGenericParameterType;
-import peapi.PrimitiveType;
-import mono.ilasm.PrimitiveTypeRef;
 import mono.ilasm.TypeDef;
 
 using hscript.Tools;
@@ -87,10 +85,12 @@ class GenPE extends Gen {
 
     var handlerBlock:HandlerBlock;
     var locals:Map<String, BaseTypeRef> = [];
+    var localSlots:Map<String, Int> = [];
     var beforeNextType:Array<Void->Void> = [];
     var closure:Closure;
     var dynamicCallSites:Array<Dynamic>; // not sure what info this will need just yet but.. need to record it for dynamics
     var printer = new hscript.Printer();
+    var next:() -> Void;
     var meta:{name:String, args:Array<Expr>, expr:Expr};
 
     var outputFile = '';
@@ -242,6 +242,7 @@ class GenPE extends Gen {
         locals = [];
         closure = null;
         mapToClrMethodBody(f.expr, method, ret);
+        generateLocals();
         if (retType.FullName == "System.Void") {
             noneInstr(peapi.Op.ret, f.expr.location());
         }
@@ -315,11 +316,11 @@ class GenPE extends Gen {
         trace(t);
         return // this of course can only be called after the first pass
             if (!firstPassComplete) throw 'First pass incomplete; cannot convert types'; else switch types.checker.follow(t) {
-                case TMono({r: null}): new PrimitiveTypeRef(PrimitiveType.Void, "System.Void");
-                case TVoid: new PrimitiveTypeRef(PrimitiveType.Void, "System.Void");
-                case TInt: new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32");
-                case TFloat: new PrimitiveTypeRef(PrimitiveType.Float32, "System.Single");
-                case TBool: new PrimitiveTypeRef(PrimitiveType.Boolean, "System.Boolean");
+                case TMono({r: null}): Primitives.VOID;
+                case TVoid: Primitives.VOID;
+                case TInt: Primitives.INT;
+                case TFloat: Primitives.FLOAT;
+                case TBool: Primitives.BOOL;
                 case TDynamic: getDynamicTypeRef();
                 case TAbstract(a, args): toClrTypeRef(types.checker.apply(a.t, a.params, args));
                 case TInst(c, args): clrApply(getTypeRef(c.name), args);
@@ -385,21 +386,12 @@ class GenPE extends Gen {
 
     // da meat
     function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void) {
-        switch expr.expr() {
-            default:
-            case EBlock(e):
-                for (expr in e) {
-                    switch expr.expr() {
-                        case EVar(n, t, e):
-                            gen.CurrentMethodDef.AddLocals({
-                                var locals = new ArrayList();
-                                locals.Add(new Local(-1, n, toClrTypeRef(types.checker.check(e))));
-                                locals;
-                            });
-                        default:
-                    }
-                }
-        }
+        inline function doNext(?done)
+            if (next != null) {
+                next();
+                if (done)
+                    next = null;
+            }
         inline function after()
             if (_after != null)
                 _after();
@@ -407,6 +399,7 @@ class GenPE extends Gen {
             // var branchEnd:LabelInfo = null;
             mapToClrMethodBody(cond, method, ret, withType);
             brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_COND), cond.location());
+            doNext();
             mapToClrMethodBody(e1, method, ret, withType);
             after();
             brTargetIdInstr(BranchOp.br_s, referenceLabel(LabelRefs.END_IF), e1.location());
@@ -418,7 +411,52 @@ class GenPE extends Gen {
             noneInstr(peapi.Op.nop, e.location());
             var endIfLabel = placeLabelRef(LabelRefs.END_IF);
         }
+
         var with = if (withType != null) WithType(withType) else null;
+        // make sure we move locals to closure as necessary, also define locals up front
+        function firstPass(e:Expr) {
+            trace(e.expr());
+            switch e.expr() {
+                case EIf(cond, e1, e2):
+                    firstPass(cond);
+                    firstPass(e1);
+                    if (e2 != null)
+                        firstPass(e2);
+
+                case EBlock(e):
+                    for (expr in e)
+                        firstPass(expr);
+                case EVar(n, t, e):
+                    var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
+                    declareLocal(n, type);
+                case EFor(v, it, e):
+                    var type = switch types.checker.check(it) {
+                        case TAnon(f):
+                            switch f[0].t {
+                                case TFun(args, ret): ret;
+                                default: throw 'Invalid iterator type';
+                            }
+                        default: throw 'Invalid iterator type';
+                    }
+
+                    declareLocal(v, type);
+                    firstPass(e);
+                case ETry(e, v, t, ecatch):
+                    var catchType = types.toTType(t);
+                    declareLocal(v, catchType);
+                    firstPass(e);
+                    firstPass(ecatch);
+                case EFunction(args, e, name, ret):
+                    e.iter(e -> switch e.expr() {
+                        case EIdent(v):
+                            if (isLocal(v)) {
+                                moveToClosure(v);
+                            }
+                        default:
+                    });
+                default:
+            }
+        }
         function doMap(e:Expr)
             switch e.expr() {
                 case EIdent('true'): // this should be EConst.CBool(v)...
@@ -441,12 +479,8 @@ class GenPE extends Gen {
                     // technically after should be null at this point.. not sure if should throw
                     types.checker.allowGlobalsDefine = true;
                     var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
-                    types.checker.setGlobal(n, type);
-                    if (closure == null)
-                        locals.set(n, toClrTypeRef(type));
-                    else
-                        closure.locals.set(n, toClrTypeRef(type));
                     mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.toTType(t)), e.location()));
+                    doNext();
                 case EBlock(e):
                     var from = gen.CurrentMethodDef.AddLabel();
                     gen.CurrentMethodDef.BeginLocalsScope();
@@ -459,6 +493,7 @@ class GenPE extends Gen {
                     mapToClrMethodBody(e, method, ret, withType, _after);
                     noneInstr(peapi.Op.ret, e.location());
                 case EIdent(i):
+                    trace(locals);
                     handleIdent(i, e.location());
                 case EUnop(op, prefix, e):
                     var type = types.checker.check(e, with);
@@ -469,6 +504,7 @@ class GenPE extends Gen {
                     var type2 = types.checker.check(e2, WithType(type1));
                     handleBinop(op, [e1, e2], [type1, type2]);
                     after();
+                    doNext();
                 case ECall(e, params):
                     var callerType = types.checker.check(e, with);
                     var paramTypes = [];
@@ -500,31 +536,25 @@ class GenPE extends Gen {
                     placeLabelRef(LabelRefs.END_LOOP);
                 case EFor(v, it, e):
                     // handle int in 0...n with a more optimized approach than obj in iterable
-                    var loopVar = getLocal(v);
-                    gen.CurrentMethodDef.AddLocals({
-                        var locals = new ArrayList();
-                        locals.Add(new Local(-1, loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32")));
-                        locals;
-                    });
+                    var loopVar = v;
+
                     switch it.expr() {
-                        case EBinop('...', hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(min)),
-                            hscript.Tools.mk(_.expr(), it).expr() => EConst(CInt(max))):
-                            if (closure == null)
-                                locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
-                            else
-                                closure.locals.set(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"));
+                        case EBinop('...', min, max) if (types.checker.check(min).match(TInt) && types.checker.check(max).match(TInt)):
                             // TODO: first pass over method body for closures
-                            intInt32Instr(IntOp.ldc_i4, min, it.location());
-                            setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
+                            // intInt32Instr(IntOp.ldc_i4, min, it.location());
+                            doMap(min);
+                            doNext();
+                            setVar(loopVar, Primitives.INT, e.location());
                             var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
+                            doMap(max);
+                            doNext();
                             handleIdent(loopVar, e.location());
-                            intInt32Instr(IntOp.ldc_i4, max, it.location());
                             brTargetIdInstr(BranchOp.beq, referenceLabel(LabelRefs.END_LOOP), it.location());
                             mapToClrMethodBody(e, method, ret, withType);
                             noneInstr(peapi.Op.ldc_i4_1, e.location());
                             handleIdent(loopVar, e.location());
                             noneInstr(peapi.Op.add, e.location());
-                            setVar(loopVar, new PrimitiveTypeRef(PrimitiveType.Int32, "System.Int32"), e.location());
+                            setVar(loopVar, Primitives.INT, e.location());
                             brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
                             placeLabelRef(LabelRefs.END_LOOP);
                         default:
@@ -536,13 +566,7 @@ class GenPE extends Gen {
                         closure = mkClosure();
                         closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
                     }
-                    e.iter(e -> switch e.expr() {
-                        case EIdent(v):
-                            if (isLocal(v)) {
-                                moveToClosure(v);
-                            }
-                        default:
-                    });
+
                     closure.methods.push({
                         name: name,
                         f: {
@@ -577,10 +601,7 @@ class GenPE extends Gen {
                         ecatch.e = EBlock([e]);
                     }
                     var catchType = toClrTypeRef(types.toTType(t));
-                    if (closure == null)
-                        locals.set(v, catchType);
-                    else
-                        closure.locals.set(v, catchType);
+                    var catchType = toClrTypeRef(types.toTType(t));
                     mapToClrMethodBody(e, method, ret, withType, _after);
                     brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
                     var tryBlock = new TryBlock(handlerBlock, e.location());
@@ -619,6 +640,10 @@ class GenPE extends Gen {
                     mapToClrMethodBody(e, method, ret, types.toTType(t), _after);
                 default:
             }
+        if (expr.expr().match(EBlock(_))) {
+            firstPass(expr);
+            setLocalSlots();
+        }
         doMap(expr);
     }
 
@@ -635,7 +660,7 @@ class GenPE extends Gen {
         gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, int, loc));
 
     inline function localIdInstr(opcode:IntOp, id:String, loc:Location) {
-        var slot = gen.CurrentMethodDef.GetNamedLocalSlot(id);
+        var slot = localSlots[id];
         if (slot < 0)
             throw 'Undeclared identifier $id';
         gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, slot, loc));
@@ -730,12 +755,64 @@ class GenPE extends Gen {
         }, loc));
 
     function handleUnop(op:String, prefix:Bool, e:Expr, type:TType) {
-        throw new haxe.exceptions.NotImplementedException();
+        switch op {
+            case '--' | '++':
+                handleIncOrDec(op, prefix, e, type);
+            case '!' if (prefix):
+                mapToClrMethodBody(e, gen.CurrentMethodDef, null);
+                noneInstr(peapi.Op.ldc_i4_0, e.location());
+                noneInstr(peapi.Op.ceq, e.location());
+            case '~' if (prefix):
+                mapToClrMethodBody(e, gen.CurrentMethodDef, null);
+                noneInstr(peapi.Op.not, e.location());
+            default:
+                throw 'invalid unary operator: $op (near ${new Printer().exprToString(e)})';
+        }
     }
 
-    function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {
-        throw new haxe.exceptions.NotImplementedException();
+    function handleIncOrDec(op:String, prefix:Bool, e:Expr, type:TType) {
+        var ident = '';
+        var opCode:peapi.Op = peapi.Op.nop;
+        inline function pre() {
+            switch e.expr() {
+                case EIdent(v):
+                    ident = v;
+                    handleIdent(v, e.location());
+                default:
+            }
+            if (prefix) {
+                noneInstr(peapi.Op.ldc_i4_1, e.location());
+                noneInstr(opCode, e.location());
+                setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
+                handleIdent(ident, e.location());
+            }
+        }
+        function post() {
+            if (!prefix) {
+                switch e.expr() {
+                    case EIdent(v):
+                        ident = v;
+                        handleIdent(v, e.location());
+                    default:
+                }
+                noneInstr(peapi.Op.ldc_i4_1, e.location());
+                noneInstr(opCode, e.location());
+                setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
+            }
+        }
+        switch type {
+            case TInt | TFloat: // lets only handle numbers for now...
+                switch op {
+                    case '++': opCode = peapi.Op.add;
+                    case '--': opCode = peapi.Op.sub;
+                }
+            default:
+        }
+        pre();
+        next = post;
     }
+
+    function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
 
     function handleCall(e:Expr, callerType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType) {
         for (param in params) {
@@ -750,8 +827,7 @@ class GenPE extends Gen {
                 var argType = toClrTypeRef(type);
                 trace(argType);
                 var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
-                    .GetMethodRef(new PrimitiveTypeRef(PrimitiveType.Void, "System.Void"), CallConv.Default, "WriteLine",
-                        NativeArray.make((argType : BaseTypeRef)), 0);
+                    .GetMethodRef(Primitives.VOID, CallConv.Default, "WriteLine", NativeArray.make((argType : BaseTypeRef)), 0);
                 callInstr(CallConv.Default, methodRef, e.location());
                 trace('?w0t');
             default:
@@ -767,6 +843,17 @@ class GenPE extends Gen {
     function handleIdent(e:String, location:Location) {
         if (locals.exists(e)) {
             localIdInstr(IntOp.ldloc_s, e, location);
+        } else if (closure != null && closure.locals.exists(e)) {
+            localIdInstr(IntOp.ldloc_s, getClosureLocal(), location);
+            var owner = gen.GetTypeRef(closure.name);
+            var type = toClrTypeRef(types.checker.check(EIdent(e).mk({
+                pmin: 0,
+                pmax: 0,
+                e: null,
+                origin: null,
+                line: 0
+            })));
+            fieldInstr(FieldOp.ldfld, type, owner, e, location);
         }
     }
 
@@ -777,11 +864,13 @@ class GenPE extends Gen {
 
     function defineClosure(closure:Closure) {}
 
-    function setVar(varName:String, type:BaseTypeRef, location:Location) {
+    function setVar(varName:String, type:BaseTypeRef, location:Location, ?pos:haxe.PosInfos) {
+        trace(pos);
+        trace(varName);
         if (locals.exists(varName)) {
             localIdInstr(IntOp.stloc_s, varName, location);
-        } else if (closure.locals.exists(varName)) {
-            fieldInstr(FieldOp.stfld, type, new TypeRef(gen.CurrentNameSpace + '.${closure.name}', false, location), varName, location);
+        } else if (closure != null && closure.locals.exists(varName)) {
+            fieldInstr(FieldOp.stfld, type, gen.GetTypeRef(closure.name), varName, location);
         }
     }
 
@@ -858,14 +947,14 @@ class GenPE extends Gen {
     // @formatter:off
     static var valueTypes = [
         // "System.String", // I think? actually its not, a Char is though
-        "System.Int64",
-        "System.Int32",
-        "System.Boolean",
-        "System.Single",
-        "System.Double",
-        "System.Int16",
-        "System.Char",
-        "System.Byte",
+        // "System.Int64",
+        // "System.Int32",
+        // "System.Boolean",
+        // "System.Single",
+        // "System.Double",
+        // "System.Int16",
+        // "System.Char",
+        // "System.Byte", wait I'm pretty sure only structs are considered valuetypes...
     ];
     // @formatter:on
     function isValueType(type:String)
@@ -883,21 +972,61 @@ class GenPE extends Gen {
             params: [],
             fields: [],
             meta: [
-                {name: "netLib", params: [
-                    EConst(CString("mscorlib")).mk({
-                        pmin: 0,
-                        pmax: 0,
-                        origin: null,
-                        line: 0,
-                        e: null
-                    })
-                ]}
+                {
+                    name: "netLib",
+                    params: [
+                        EConst(CString("mscorlib")).mk({
+                            pmin: 0,
+                            pmax: 0,
+                            origin: null,
+                            line: 0,
+                            e: null
+                        })
+                    ]
+                }
             ],
             isExtern: true,
             isPrivate: false,
             extend: null,
             implement: null
         }));
+    }
+
+    function getClosureLocal():String {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+    function setLocalSlots() {
+        var index = 0;
+        for (local => type in locals) {
+            localSlots[local] = index++;
+        }
+    }
+
+    function declareLocal(n:String, type:TType, ?throwOnDup) {
+        trace('declaring local $n');
+        trace(type);
+        types.checker.setGlobal(n, type);
+        if (closure == null) {
+            if (!locals.exists(n)) {
+                locals.set(n, toClrTypeRef(type));
+            } else if (throwOnDup)
+                throw 'duplicate local variable $n redefined as $type';
+        } else {
+            if (!closure.locals.exists(n))
+                closure.locals.set(n, toClrTypeRef(type));
+            else if (throwOnDup)
+                throw 'duplicate closure variable $n redefined as $type';
+        }
+    }
+
+    function generateLocals() {
+        gen.CurrentMethodDef.AddLocals({
+            var arrList = new ArrayList();
+            for (local => clrType in locals)
+                arrList.Add(new Local(localSlots[local], local, clrType));
+            arrList;
+        });
     }
 }
 

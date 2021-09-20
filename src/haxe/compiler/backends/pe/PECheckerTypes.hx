@@ -1,9 +1,10 @@
 package haxe.compiler.backends.pe;
+
 import hscript.Checker;
 import hscript.Expr;
+
 using hscript.Tools;
 using Lambda;
-
 
 class PECheckerTypes extends CheckerBase {
     var typeAssemblies:Map<String, String> = new Map();
@@ -15,13 +16,12 @@ class PECheckerTypes extends CheckerBase {
             statics: [],
             params: [],
             fields: []
-        },[]);
+        }, []);
     }
 
     public override function setPack(pk) {
         currentPack = pk;
     }
-    
 
     public override function addType(decl:ModuleDecl) {
         var name = currentPack;
@@ -64,10 +64,13 @@ class PECheckerTypes extends CheckerBase {
     public function getAssembly(type:String):String
         return typeAssemblies[type];
 
-    public override function toTType(t:CType):TType
+    public override function toTType(t:CType):TType {
+        trace(t);
         return if (t == null) TVoid else switch t {
             case CTPath(pack, params):
-                resolve(pack.join('.'), [for (param in params) toTType(param)]);
+                trace(pack);
+                trace(params);
+                resolve(pack.join('.'), if(params == null) null else [for (param in params) toTType(param)]);
             case CTAnon(fields):
                 var fields = [
                     for (field in fields)
@@ -95,6 +98,7 @@ class PECheckerTypes extends CheckerBase {
                 // default:
                 //     null;
         }
+    }
 
     public function toCField(f:FieldDecl):CField {
         return {

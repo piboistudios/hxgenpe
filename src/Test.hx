@@ -32,7 +32,11 @@ class Test {
     public static function main() {
         var t = "Hello, World!";
         var cond = true;
-        if(cond) for(i in 0...10) trace(t);
+        try {
+            if(cond) for(i in 0...10) trace(i++);
+        } catch(e:System.String) {
+            trace("Fail");
+        }
     }
 }
 ';
