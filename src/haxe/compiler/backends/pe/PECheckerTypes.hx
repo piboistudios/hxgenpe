@@ -48,7 +48,7 @@ class PECheckerTypes extends CheckerBase {
                 var ctypedef:CTypedef = {
                     name: name,
                     params: [],
-                    t: toTType(c.t)
+                    t: checker.makeType(c.t)
                 };
                 CTTypedef(ctypedef);
             // TODO: hscript abstracts and enums
@@ -64,41 +64,6 @@ class PECheckerTypes extends CheckerBase {
     public function getAssembly(type:String):String
         return typeAssemblies[type];
 
-    public override function toTType(t:CType):TType {
-        trace(t);
-        return if (t == null) TVoid else switch t {
-            case CTPath(pack, params):
-                trace(pack);
-                trace(params);
-                resolve(pack.join('.'), if(params == null) null else [for (param in params) toTType(param)]);
-            case CTAnon(fields):
-                var fields = [
-                    for (field in fields)
-                        {
-                            t: toTType(field.t),
-                            opt: isOpt(field.t), // TODO: only works for function args in hscript, not anon fields atm.
-                            name: field.name
-                        }
-                ];
-                TAnon(fields);
-            case CTParent(t): toTType(t);
-            case CTOpt(t): toTType(t);
-            case CTNamed(_, t): toTType(t);
-            case CTFun(args, ret):
-                var args = [
-                    for (arg in args)
-                        switch arg {
-                            case CTNamed(n, t):
-                                {name: n, t: toTType(t), opt: isOpt(t)}
-                            default:
-                                throw 'invalid hscript argument type';
-                        }
-                ];
-                TFun(args, toTType(ret));
-                // default:
-                //     null;
-        }
-    }
 
     public function toCField(f:FieldDecl):CField {
         return {
@@ -106,8 +71,8 @@ class PECheckerTypes extends CheckerBase {
             params: [], // TODO: add params to hscript fields
             t: switch f.kind {
                 case KFunction(f):
-                    var args = f.args.map(arg -> {name: arg.name, opt: arg.opt, t: toTType(arg.t)});
-                    TFun(args, if (f.ret != null) toTType(f.ret) else TVoid);
+                    var args = f.args.map(arg -> {name: arg.name, opt: arg.opt, t: checker.makeType(arg.t, arg.value)});
+                    TFun(args, if (f.ret != null) checker.makeType(f.ret, f.expr) else TVoid);
                 case KVar(v):
                     checker.check(v.expr);
             },
@@ -128,7 +93,5 @@ class PECheckerTypes extends CheckerBase {
         }
     }
 
-    function isOpt(arg0:CType):Bool {
-        return arg0.match(CTOpt(_));
-    }
+    
 }

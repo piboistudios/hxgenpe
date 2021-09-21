@@ -20,7 +20,6 @@ class CheckerBase implements GenCheckerTypes {
             return null;
         if (args == null)
             args = [];
-        
         return switch (t) {
             case CTClass(c): TInst(c, args);
             case CTEnum(e): TEnum(e, args);

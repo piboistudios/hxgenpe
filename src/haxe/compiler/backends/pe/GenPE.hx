@@ -77,6 +77,7 @@ using haxe.compiler.backends.pe.GenPE;
 
 typedef Deferred = Array<Void->Void>;
 
+
 class GenPE extends Gen {
     public var gen:CodeGen;
     public var peTypes:PECheckerTypes;
@@ -122,6 +123,7 @@ class GenPE extends Gen {
 
     public function buildHscript(sourceModule, types) {
         gen.BeginSourceFile('$sourceModule.hscript');
+        // TODO: Add actual mechanism for loading assemblies...
         gen.BeginAssemblyRef("mscorlib", new AssemblyName("mscorlib"), peapi.AssemAttr.Retargetable);
         gen.EndAssemblyRef();
         gen.SetThisAssembly({
@@ -221,13 +223,13 @@ class GenPE extends Gen {
 
         var implAttr = ImplAttr.IL;
 
-        var ret = types.checker.check(f.expr, if (f.ret != null) WithType(types.toTType(f.ret)) else WithType(TVoid));
+        var ret = types.checker.check(f.expr, if (f.ret != null) WithType(types.checker.makeType(f.ret, f.expr)) else WithType(TVoid));
         var retType = toClrTypeRef(ret);
 
         var ownerType = gen.CurrentTypeDef; // lookupType(owner).toClrTypeDef(this);
         var paramList = new cs.system.collections.ArrayList();
         for (arg in f.args)
-            paramList.Add(if (arg.value == null) types.toTType(arg.t) else types.checker.check(arg.value, WithType(types.toTType(arg.t))));
+            paramList.Add(if (arg.value == null) types.checker.makeType(arg.t, arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value))));
 
         var genericParameters = null;
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
@@ -280,7 +282,7 @@ class GenPE extends Gen {
         // }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
-        var type = if (v.expr != null) types.checker.check(v.expr, WithType(types.toTType(v.type))) else types.toTType(v.type);
+        var type = if (v.expr != null) types.checker.check(v.expr, WithType(types.checker.makeType(v.type, v.expr))) else types.checker.makeType(v.type, v.expr);
         var clrType = toClrTypeRef(type);
         var field = new FieldDef(flags, name, clrType);
         gen.AddFieldDef(field);
@@ -429,7 +431,7 @@ class GenPE extends Gen {
                     for (expr in e)
                         firstPass(expr);
                 case EVar(n, t, e):
-                    var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
+                    var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
                     declareLocal(n, type);
                 case EFor(v, it, e):
                     var type = switch types.checker.check(it) {
@@ -444,7 +446,7 @@ class GenPE extends Gen {
                     declareLocal(v, type);
                     firstPass(e);
                 case ETry(e, v, t, ecatch):
-                    var catchType = types.toTType(t);
+                    var catchType = types.checker.makeType(t, expr);
                     declareLocal(v, catchType);
                     firstPass(e);
                     firstPass(ecatch);
@@ -480,8 +482,8 @@ class GenPE extends Gen {
                 case EVar(n, t, e): // should support an array... e.g. var a,b,c;
                     // technically after should be null at this point.. not sure if should throw
                     types.checker.allowGlobalsDefine = true;
-                    var type = types.checker.check(e, if (t != null) WithType(types.toTType(t)) else null);
-                    mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.toTType(t)), e.location()));
+                    var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
+                    mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.checker.makeType(t, expr)), e.location()));
                     doNext();
                 case EBlock(e):
                     var from = gen.CurrentMethodDef.AddLabel();
@@ -589,7 +591,7 @@ class GenPE extends Gen {
                     if (!ecatch.expr().match(EBlock(_))) {
                         ecatch.e = EBlock([e]);
                     }
-                    var catchType = toClrTypeRef(types.toTType(t));
+                    var catchType = toClrTypeRef(types.checker.makeType(t, expr));
                     mapToClrMethodBody(e, method, ret, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
                     
                     var tryBlock = new TryBlock(handlerBlock, e.location());
@@ -625,7 +627,7 @@ class GenPE extends Gen {
                     meta = {name: name, args: args, expr: e};
                     mapToClrMethodBody(e, method, ret, withType, _after);
                 case ECheckType(e, t): // or not
-                    mapToClrMethodBody(e, method, ret, types.toTType(t), _after);
+                    mapToClrMethodBody(e, method, ret, types.checker.makeType(t,expr), _after);
                 default:
             }
         if (expr.expr().match(EBlock(_))) {
@@ -802,7 +804,7 @@ class GenPE extends Gen {
 
     function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
 
-    function handleCall(e:Expr, funcType:TType, params:Array<Expr>, retType) {
+    function handleCall(e:Expr, funcType:TType, params:Array<Expr>, retType:TType) {
         // 1. Resolve the method to be called
         // 2. Put the parameters on the stack, and perform conversions as necessary
         // 3. Handle calling convention (generic, native, standard, virtual)
@@ -826,39 +828,64 @@ class GenPE extends Gen {
             params[i] = doConversion(param,argType);
             mapToClrMethodBody(params[i], gen.CurrentMethodDef, ret, argType);
         }
-        
+        var methodParams = method.field.params;
+        var methodArgs = [];
+        switch method.field.t {
+            case TFun(args, ret):
+                methodArgs = args;
+            default:
+        }
         switch method.field.kind {
             case Closure: // probably use function pointers...
             case InstanceMethod|StaticMethod: // probably need more kinds... 
                             // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
                 var callConv:Int = 0;
                 callConv |= cast if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
+                
+                
+                if(methodParams.length != 0) callConv |= cast CallConv.Generic;
+                var genericArguments = if(methodParams != null && methodParams.length != 0) new GenericArguments() else null;
+                if(genericArguments != null) {
+                    // resolve generic params
+                    var slots = [for(param in methodParams) {
+                        var paramName = switch param {
+                            case TParam(name): name;
+                            default: null;
+                        }
+                        if(paramName == null) throw 'invalid generic parameter: $param';
+                        var slot = null;
+                        for(i in 0...methodArgs.length) {
+                            var arg = args[i];
+                            switch arg.t {
+                                case TParam(name) if(paramName == name):
+                                    slot = i;
+                                    break;
+                                default:
+                            }
+                        }
+                        if(slot == null) switch retType {
+                            case TParam(name) if(paramName == name):
+                                slot = -1;
+                            default:
+                        }
+                        slot;
+                    }];
+                    for(i in 0...methodParams.length) {
+                        var slot = slots[0];
+                        if(slot == null) throw 'unable to resolve generic parameter: ${methodParams[i]}';
+                        genericArguments.Add(toClrTypeRef(if(slot == -1) retType else types.checker.check(params[i])));
+                    }
+                }
                 var callerClrType = toClrTypeRef(method.caller.type);
                 var retClrType = toClrTypeRef(ret);
                 var genParamCount = 0;
                 if(genParamCount != 0) callConv |= cast CallConv.Generic;
                 var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
                 var methRef = callerClrType.GetMethodRef(retClrType,cast  callConv, method.field.name, clrParamTypes, genParamCount);
+                if(genericArguments != null) methRef.GetGenericMethodRef(genericArguments);
                 methodInstr(MethodOp.call, methRef, e.location());
             case Module:
         }
-        // for (param in params) {
-        //     mapToClrMethodBody(param, gen.CurrentMethodDef, null);
-        // }
-        // switch e.expr() {
-        //     case EIdent('trace'):
-        //         // just a quick hack to make trace do console log with one arg...
-        //         // don't blame me I want to test FFS
-        //         var type = types.checker.check(params[0]);
-        //         trace(type);
-        //         var argType = toClrTypeRef(type);
-        //         trace(argType);
-        //         var methodRef = gen.ExternTable.GetTypeRef("mscorlib", "System.Console", false)
-        //             .GetMethodRef(Primitives.VOID, CallConv.Default, "WriteLine", NativeArray.make((argType : BaseTypeRef)), 0);
-        //         callInstr(CallConv.Default, methodRef, e.location());
-        //     default:
-        //         trace(e);
-        // }
     }
 
     // so, to reference a field in CLR, you need to know if
