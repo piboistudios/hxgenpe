@@ -853,7 +853,7 @@ class GenPE extends Gen {
                             default: null;
                         }
                         if(paramName == null) throw 'invalid generic parameter: $param';
-                        var slot = null;
+                        var slot:Null<Int> = null;
                         for(i in 0...methodArgs.length) {
                             var arg = args[i];
                             switch arg.t {
