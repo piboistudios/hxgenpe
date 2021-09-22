@@ -1,9 +1,9 @@
 package haxe.compiler.backends.pe;
 
+import cs.system.reflection.PropertyInfo;
 import cs.system.reflection.MethodInfo;
 import cs.system.reflection.MethodInfo;
-import cs.system.reflection.MemberInfo;
-import cs.system.reflection.MemberInfo;
+import cs.system.reflection.FieldInfo;
 import haxe.exceptions.NotImplementedException;
 import cs.system.reflection.Assembly;
 import hscript.Checker;
@@ -63,8 +63,10 @@ class PECheckerTypes extends CheckerBase {
             default:
                 null;
         }
-        if (type != null)
+        if (type != null) {
+            trace('Adding type: $type\r\n$type');
             types.set(name, type);
+        }
     }
 
     public function getAssembly(type:String):String
@@ -79,7 +81,8 @@ class PECheckerTypes extends CheckerBase {
                     var args = f.args.map(arg -> {name: arg.name, opt: arg.opt, t: checker.makeType(arg.t, arg.value)});
                     TFun(args, if (f.ret != null) checker.makeType(f.ret, f.expr) else TVoid);
                 case KVar(v):
-                    checker.check(v.expr);
+                    if(v.expr != null) checker.check(v.expr, WithType(checker.makeType(v.type, v.expr)));
+                    else checker.makeType(v.type);
             },
             isPublic: f.access.contains(APublic),
             canWrite: true,
@@ -112,88 +115,174 @@ class PECheckerTypes extends CheckerBase {
             ]
         };
 
-    public function loadAssembly(path) {
-        var asm = Assembly.LoadFrom(path);
-        var asmName = asm.GetName().Name;
+    public function loadAssembly(asmName) {
+        var asm = Assembly.LoadFrom('$asmName.dll');
+        trace('loading $asm $asmName');
         var types = asm.GetTypes();
+        trace('types: ${types.length}');
         var allTypes = [];
         for (type in types) {
-            allTypes.push(type);
-            var nestedTypes = cs.Lib.array(type.GetNestedTypes());
-            do {
-                for (type in nestedTypes) {
-                    allTypes.push(type);
-                    nestedTypes = nestedTypes.concat(cs.Lib.array(type.GetNestedTypes()));
-                }
-            } while (nestedTypes.length != 0);
-        }
-        for (type in allTypes) {
-            var decl:ModuleDecl = if (type.IsClass) {
+            if (type.IsClass) {
+                trace(type.FullName);
                 var cclass:ClassDecl = {
                     name: toHxTypeName(type.FullName).join('.'),
                     params: {}, // TODO: hscript generic params
                     isPrivate: type.IsNotPublic,
                     isExtern: true,
-                    implement: [for (intface in type.GetInterfaces()) CTPath(toHxTypeName(intface.FullName))],
+                    implement: [
+                        for (intface in type.GetInterfaces())
+                            CTPath(toHxTypeName(intface.FullName))
+                    ],
                     meta: [mkNetLibMeta(asmName)],
 
                     fields: [
-                        for (field in type.GetMembers())
+                        // variables
+                        for (field in cs.Lib.array(type.GetFields()).filter(f -> f.IsPublic))
                             {
                                 name: field.Name,
                                 meta: getClrFieldMeta(field),
                                 kind: KVar(getClrVarDecl(field)),
                                 access: getClrFieldAccess(field)
                             }
-                    ].concat([
-                        for (method in type.GetMethods()) {
-                            name: method.Name,
-                            meta: getClrMethodMeta(method),
-                            kind: KFunction(getClrMethodDecl(method)),
-                            access: getClrMethodAccess(method)
-                        }
+                    ] // properties
+                        .concat(cs.Lib.array(type.GetProperties()).fold((prop, a) -> {
+                            var array:Array<FieldDecl> = a;
+                            trace(prop);
+                            var varDecl:FieldDecl = {
+                                name: prop.Name,
+                                meta: getClrPropertyMeta(prop),
+                                kind: KVar(getClrPropertyDecl(prop)),
+                                access: getClrPropertyAccess(prop)
+                            };
+                            array.push(varDecl);
+                            var getter = prop.GetMethod, setter = prop.SetMethod;
+                            if(getter != null) {
+
+                                var getDecl:FieldDecl = {
+                                    name: getter.Name,
+                                    meta: getClrMethodMeta(getter),
+                                    kind: KFunction(getClrMethodDecl(getter)),
+                                    access: getClrMethodAccess(getter)
+                                };
+                                array.push(getDecl);
+                            }
+                            if(setter != null) {
+
+                                var setDecl:FieldDecl = {
+                                    name: setter.Name,
+                                    meta: getClrMethodMeta(setter),
+                                    kind: KFunction(getClrMethodDecl(setter)),
+                                    access: getClrMethodAccess(setter)
+                                };
+                                array.push(setDecl);
+                            }
+                            
+                            return array;
+                        }, [])) // methods
+                        .concat([
+                            for (method in type.GetMethods())
+                                {
+                                    name: method.Name,
+                                    meta: getClrMethodMeta(method),
+                                    kind: KFunction(getClrMethodDecl(method)),
+                                    access: getClrMethodAccess(method)
+                                }
                         ]),
                     extend: CTPath(toHxTypeName(type.BaseType.FullName))
                 };
-                DClass(cclass);
-            } else if (type.IsEnum) {
-                throw new NotImplementedException();
-            } else if (type.IsInterface) {
-                throw new NotImplementedException();
-            } else if (type.IsValueType) {
-                throw new NotImplementedException();
-            } else {
-                throw new NotImplementedException();
-            }
-            addType(decl);
+                addType(DClass(cclass));
+            } else if (type.IsEnum) {} else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
+            // if(decl != null) addType(decl);
         }
     }
 
-    function toHxTypeName(arg0:String):Array<String> {
-        throw new haxe.exceptions.NotImplementedException();
+    function toHxTypeName(arg0:String, ?pos:haxe.PosInfos):Array<String> {
+        trace(pos);
+        var parts = arg0.split('.');
+        if (parts[0] == "System")
+            parts.unshift('cs');
+        for (i in 0...parts.length - 1) {
+            var part = parts[i];
+            part = part.substr(0, 1).toLowerCase() + part.substr(1);
+        }
+        return parts;
     }
 
-    function getClrFieldMeta(field:MemberInfo):Metadata {
-        throw new haxe.exceptions.NotImplementedException();
+    function getClrFieldMeta(field:FieldInfo):Metadata {
+        return [];
     }
 
-    function getClrFieldAccess(field:MemberInfo):Array<FieldAccess> {
-        throw new haxe.exceptions.NotImplementedException();
+    function getClrFieldAccess(field:FieldInfo):Array<FieldAccess> {
+        var access = [];
+        if (field.IsStatic)
+            access.push(AStatic);
+        if (field.IsPublic)
+            access.push(APublic);
+        if (field.IsPrivate)
+            access.push(APrivate);
+        return access;
     }
 
-    function getClrVarDecl(field:MemberInfo):VarDecl {
-        throw new haxe.exceptions.NotImplementedException();
+    function getClrVarDecl(field:FieldInfo):VarDecl {
+        // TODO: something with... field.FieldType.IsGenericType 
+        var decl:VarDecl = {
+            type: CTPath(toHxTypeName(if (field.FieldType.FullName == null) field.FieldType.Name else field.FieldType.FullName)),
+            set: null,
+            get: null,
+            expr: null
+        };
+        return decl;
     }
 
-	function getClrMethodMeta(method:MethodInfo):Metadata {
-		throw new haxe.exceptions.NotImplementedException();
-	}
+    function getClrMethodMeta(method:MethodInfo):Metadata {
+        return [];
+    }
 
-	function getClrMethodAccess(method:MethodInfo):Array<FieldAccess> {
-		throw new haxe.exceptions.NotImplementedException();
-	}
+    function getClrMethodAccess(method:MethodInfo):Array<FieldAccess> {
+        var access = [];
+        if (method.IsStatic)
+            access.push(AStatic);
+        if (method.IsPublic)
+            access.push(APublic);
+        if (method.IsPrivate)
+            access.push(APrivate);
+        return access;
+    }
 
-	function getClrMethodDecl(method:MethodInfo):FunctionDecl {
-		throw new haxe.exceptions.NotImplementedException();
-	}
+    function getClrMethodDecl(method:MethodInfo):FunctionDecl {
+        var decl:FunctionDecl = {
+            ret: CTPath(toHxTypeName(if (method.ReturnType != null) if (method.ReturnType.FullName != null) method.ReturnType.FullName else method.ReturnType.Name else "System.Void")),
+            args: [
+                for (parameter in cs.Lib.array(method.GetParameters()).map(p -> {type: p.ParameterType, name: p.Name, opt: p.IsOptional}))
+                    ({
+                        t:CTPath(toHxTypeName(if (parameter.type.FullName == null) parameter.type.Name else parameter.type.FullName)), name:parameter.name,
+                        opt:parameter.opt
+                    } : hscript.Argument)
+            ],
+            expr: null
+        }
+        return decl;
+    }
+
+    function getClrPropertyMeta(property:PropertyInfo):Metadata {
+        return [];
+    }
+
+    function getClrPropertyDecl(property:PropertyInfo):VarDecl {
+        trace(property.PropertyType.FullName);
+        var name = if (property.PropertyType.FullName == null) property.PropertyType.Name else property.PropertyType.FullName;
+        trace(name);
+        var decl:VarDecl = {
+            type: CTPath(toHxTypeName(name)),
+            set: if (property.GetMethod != null) property.GetMethod.Name else null,
+            get: if (property.SetMethod != null) property.SetMethod.Name else null,
+            expr: null
+        };
+        return decl;
+    }
+
+    function getClrPropertyAccess(property:PropertyInfo):Array<FieldAccess> {
+        var access = [];
+        return access;
+    }
 }

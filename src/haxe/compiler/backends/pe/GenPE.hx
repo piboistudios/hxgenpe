@@ -124,8 +124,7 @@ class GenPE extends Gen {
     public function buildHscript(sourceModule, types) {
         gen.BeginSourceFile('$sourceModule.hscript');
         // TODO: Add actual mechanism for loading assemblies...
-        gen.BeginAssemblyRef("mscorlib", new AssemblyName("mscorlib"), peapi.AssemAttr.Retargetable);
-        gen.EndAssemblyRef();
+        loadAssemblies();
         gen.SetThisAssembly({
             var l = outputFile.split('.');
             l.pop();
@@ -1064,23 +1063,19 @@ class GenPE extends Gen {
 	function doConversion(param:Expr, argType:TType):Expr {
 		throw new haxe.exceptions.NotImplementedException();
 	}
+    var externAssemblies = [
+        'mscorlib'
+    ];
+	function loadAssemblies() {
+        for(asm in externAssemblies) {
+            gen.BeginAssemblyRef(asm, new AssemblyName(asm), peapi.AssemAttr.Retargetable);
+            peTypes.loadAssembly(asm);
+            gen.EndAssemblyRef();
+        }
+    }
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
-
-class ClrMethodDefTools {
-    public static function op(method:MethodDef, op, operand, loc)
-        method.AddInstr(new MethodInstr(op, operand, loc));
-}
-
-class OpTools {
-    public static inline function ldstr(s:String, loc)
-        return new LdstrInstr({
-            var arr:Array<UInt8> = [for (i in 0...s.length) s.fastCodeAt(i)];
-            Lib.nativeArray(arr, false);
-        }, loc);
-}
-
 class HscriptExprTools {
     public static inline function location(expr:hscript.Expr)
         return new Location(expr.line, expr.pmin);

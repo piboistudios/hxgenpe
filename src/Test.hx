@@ -33,7 +33,7 @@ class Test {
         var t = "Hello, World!";
         var cond = true;
         try {
-            if(cond) for(i in 0...10) trace(i++);
+            if(cond) for(i in 0...10) cs.system.Console.WriteLine(i++);
         } catch(e:System.Exception) {
             trace(e);
         }
