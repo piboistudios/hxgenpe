@@ -1,5 +1,9 @@
 package haxe.compiler.backends.pe;
 
+import cs.system.reflection.MemberInfo;
+import cs.system.reflection.MemberInfo;
+import haxe.exceptions.NotImplementedException;
+import cs.system.reflection.Assembly;
 import hscript.Checker;
 import hscript.Expr;
 
@@ -64,7 +68,6 @@ class PECheckerTypes extends CheckerBase {
     public function getAssembly(type:String):String
         return typeAssemblies[type];
 
-
     public function toCField(f:FieldDecl):CField {
         return {
             name: f.name,
@@ -93,5 +96,82 @@ class PECheckerTypes extends CheckerBase {
         }
     }
 
-    
+    public function loadAssembly(path) {
+        var asm = Assembly.LoadFrom(path);
+        var asmName = asm.GetName().Name;
+        var types = asm.GetTypes();
+        var allTypes = [];
+        for (type in types) {
+            allTypes.push(type);
+            var nestedTypes = cs.Lib.array(type.GetNestedTypes());
+            do {
+                for (type in nestedTypes) {
+                    allTypes.push(type);
+                    nestedTypes = nestedTypes.concat(cs.Lib.array(type.GetNestedTypes()));
+                }
+            } while (nestedTypes.length != 0);
+        }
+        for (type in allTypes) {
+            var decl:ModuleDecl = if (type.IsClass) {
+                var nameParts = type.FullName.split('.').map(part -> part.toLowerCase());
+                nameParts[nameParts.length - 1] = nameParts[nameParts.length - 1].substr(0, 1).toUpperCase() + nameParts[nameParts.length - 1].substr(1);
+                var typeName = nameParts.join('.');
+                var cclass:ClassDecl = {
+                    name: typeName,
+                    params: {}, // TODO: hscript generic params
+                    isPrivate: type.IsNotPublic,
+                    isExtern: true,
+                    implement: [for (intface in type.GetInterfaces()) CTPath(toHxTypeName(intface.FullName))],
+                    meta: [
+                        {
+                            name: "netLib",
+                            params: [
+                                EConst(CString(asmName)).mk({
+                                    e: null,
+                                    origin: null,
+                                    line: 0,
+                                    pmin: 0,
+                                    pmax: 0
+                                })
+                            ]
+                        }
+                    ],
+            
+                    fields: [for(field in type.GetMembers()) {
+                        name: field.Name,
+                        meta: getClrFieldMeta(field),
+                        kind: KVar(getClrVarDecl(field)),
+                        access: getClrFieldAccess(field)
+                    }],
+                    extend: CTPath(toHxTypeName(type.BaseType.FullName))
+                };
+                DClass(cclass);
+            } else if (type.IsEnum) {
+                throw new NotImplementedException();
+            } else if (type.IsInterface) {
+                throw new NotImplementedException();
+            } else if (type.IsValueType) {
+                throw new NotImplementedException();
+            } else {
+                throw new NotImplementedException();
+            }
+            addType(decl);
+        }
+    }
+
+    function toHxTypeName(arg0:String):Array<String> {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+	function getClrFieldMeta(field:MemberInfo):Metadata {
+		throw new haxe.exceptions.NotImplementedException();
+	}
+
+	function getClrFieldAccess(field:MemberInfo):Array<FieldAccess> {
+		throw new haxe.exceptions.NotImplementedException();
+	}
+
+	function getClrVarDecl(field:MemberInfo):VarDecl {
+		throw new haxe.exceptions.NotImplementedException();
+	}
 }

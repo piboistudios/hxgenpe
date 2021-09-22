@@ -49,8 +49,9 @@ class Gen {
             default:
                 caller = e;
         }
-        var callerType = types.checker.check(caller);
+        
         var paramTypes = [for (param in params) types.checker.check(param)];
+        
         function findMethod(field:{t:TType})
             return switch field.t {
                 case TFun(funcArgs, ret):
@@ -65,7 +66,7 @@ class Gen {
                     true;
                 default: false;
             }
-        if (callerType == null) {
+        if (caller == null) {
             var functionType = types.checker.check(e);
             switch functionType {
                 case TFun(args, ret):
@@ -77,9 +78,10 @@ class Gen {
                             params: []
                         }
                     }
-                default: throw 'Invalid call expression';
+                default: throw 'Invalid call expression $functionType $e';
             }
         } else {
+            var callerType = types.checker.check(caller);
             var isStatic = false;
             var method:Dynamic = switch callerType {
                 case TAnon(fields):
