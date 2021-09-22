@@ -1,5 +1,7 @@
 package haxe.compiler.backends.pe;
 
+import cs.system.reflection.MethodInfo;
+import cs.system.reflection.MethodInfo;
 import cs.system.reflection.MemberInfo;
 import cs.system.reflection.MemberInfo;
 import haxe.exceptions.NotImplementedException;
@@ -96,6 +98,20 @@ class PECheckerTypes extends CheckerBase {
         }
     }
 
+    function mkNetLibMeta(asm)
+        return {
+            name: "netLib",
+            params: [
+                EConst(CString(asm)).mk({
+                    e: null,
+                    origin: null,
+                    line: 0,
+                    pmin: 0,
+                    pmax: 0
+                })
+            ]
+        };
+
     public function loadAssembly(path) {
         var asm = Assembly.LoadFrom(path);
         var asmName = asm.GetName().Name;
@@ -113,36 +129,30 @@ class PECheckerTypes extends CheckerBase {
         }
         for (type in allTypes) {
             var decl:ModuleDecl = if (type.IsClass) {
-                var nameParts = type.FullName.split('.').map(part -> part.toLowerCase());
-                nameParts[nameParts.length - 1] = nameParts[nameParts.length - 1].substr(0, 1).toUpperCase() + nameParts[nameParts.length - 1].substr(1);
-                var typeName = nameParts.join('.');
                 var cclass:ClassDecl = {
-                    name: typeName,
+                    name: toHxTypeName(type.FullName).join('.'),
                     params: {}, // TODO: hscript generic params
                     isPrivate: type.IsNotPublic,
                     isExtern: true,
                     implement: [for (intface in type.GetInterfaces()) CTPath(toHxTypeName(intface.FullName))],
-                    meta: [
-                        {
-                            name: "netLib",
-                            params: [
-                                EConst(CString(asmName)).mk({
-                                    e: null,
-                                    origin: null,
-                                    line: 0,
-                                    pmin: 0,
-                                    pmax: 0
-                                })
-                            ]
+                    meta: [mkNetLibMeta(asmName)],
+
+                    fields: [
+                        for (field in type.GetMembers())
+                            {
+                                name: field.Name,
+                                meta: getClrFieldMeta(field),
+                                kind: KVar(getClrVarDecl(field)),
+                                access: getClrFieldAccess(field)
+                            }
+                    ].concat([
+                        for (method in type.GetMethods()) {
+                            name: method.Name,
+                            meta: getClrMethodMeta(method),
+                            kind: KFunction(getClrMethodDecl(method)),
+                            access: getClrMethodAccess(method)
                         }
-                    ],
-            
-                    fields: [for(field in type.GetMembers()) {
-                        name: field.Name,
-                        meta: getClrFieldMeta(field),
-                        kind: KVar(getClrVarDecl(field)),
-                        access: getClrFieldAccess(field)
-                    }],
+                        ]),
                     extend: CTPath(toHxTypeName(type.BaseType.FullName))
                 };
                 DClass(cclass);
@@ -163,15 +173,27 @@ class PECheckerTypes extends CheckerBase {
         throw new haxe.exceptions.NotImplementedException();
     }
 
-	function getClrFieldMeta(field:MemberInfo):Metadata {
+    function getClrFieldMeta(field:MemberInfo):Metadata {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+    function getClrFieldAccess(field:MemberInfo):Array<FieldAccess> {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+    function getClrVarDecl(field:MemberInfo):VarDecl {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+	function getClrMethodMeta(method:MethodInfo):Metadata {
 		throw new haxe.exceptions.NotImplementedException();
 	}
 
-	function getClrFieldAccess(field:MemberInfo):Array<FieldAccess> {
+	function getClrMethodAccess(method:MethodInfo):Array<FieldAccess> {
 		throw new haxe.exceptions.NotImplementedException();
 	}
 
-	function getClrVarDecl(field:MemberInfo):VarDecl {
+	function getClrMethodDecl(method:MethodInfo):FunctionDecl {
 		throw new haxe.exceptions.NotImplementedException();
 	}
 }

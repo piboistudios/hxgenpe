@@ -1020,34 +1020,9 @@ class GenPE extends Gen {
     }
 
     function init() {
-        addExternClass("System.String", "mscorlib");
-        addExternClass("System.Exception", "mscorlib");
+        
     }
-    inline function addExternClass(c, asm) {
-        types.addType(DClass({
-            name: c,
-            params: [],
-            fields: [],
-            meta: [
-                {
-                    name: "netLib",
-                    params: [
-                        EConst(CString(asm)).mk({
-                            pmin: 0,
-                            pmax: 0,
-                            origin: null,
-                            line: 0,
-                            e: null
-                        })
-                    ]
-                }
-            ],
-            isExtern: true,
-            isPrivate: false,
-            extend: null,
-            implement: null
-        }));
-    }
+    
 
     function getClosureLocal():String {
         throw new haxe.exceptions.NotImplementedException();
