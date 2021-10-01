@@ -11,6 +11,7 @@ import hscript.Expr;
 
 using hscript.Tools;
 using Lambda;
+using haxe.compiler.backends.pe.PECheckerTypes;
 
 class PECheckerTypes extends CheckerBase {
     var typeAssemblies:Map<String, String> = new Map();
@@ -28,8 +29,12 @@ class PECheckerTypes extends CheckerBase {
     public override function setPack(pk) {
         currentPack = pk;
     }
-
+    public static function getName(t:cs.system.Type) {
+        var ret =  if(t.FullName == null) t.Name else t.FullName;
+        return if(ret == null) "<Unknown>" else ret;
+    }
     public override function addType(decl:ModuleDecl) {
+        trace('Adding $decl');
         var name = currentPack;
         var type:CTypedecl = switch decl {
             case DClass(c):
@@ -81,8 +86,7 @@ class PECheckerTypes extends CheckerBase {
                     var args = f.args.map(arg -> {name: arg.name, opt: arg.opt, t: checker.makeType(arg.t, arg.value)});
                     TFun(args, if (f.ret != null) checker.makeType(f.ret, f.expr) else TVoid);
                 case KVar(v):
-                    if(v.expr != null) checker.check(v.expr, WithType(checker.makeType(v.type, v.expr)));
-                    else checker.makeType(v.type);
+                    if (v.expr != null) checker.check(v.expr, WithType(checker.makeType(v.type, v.expr))); else checker.makeType(v.type);
             },
             isPublic: f.access.contains(APublic),
             canWrite: true,
@@ -122,16 +126,24 @@ class PECheckerTypes extends CheckerBase {
         trace('types: ${types.length}');
         var allTypes = [];
         for (type in types) {
+            if(!type.IsVisible) {
+                trace('Skipping ${type.Name}');
+                continue;
+            }
             if (type.IsClass) {
-                trace(type.FullName);
+                trace(type.getName());
                 var cclass:ClassDecl = {
-                    name: toHxTypeName(type.FullName).join('.'),
+                    name: toHxTypeName(type.getName()).join('.'),
                     params: {}, // TODO: hscript generic params
                     isPrivate: type.IsNotPublic,
                     isExtern: true,
                     implement: [
-                        for (intface in type.GetInterfaces())
-                            CTPath(toHxTypeName(intface.FullName))
+                        for (intface in type.GetInterfaces()) {
+                            trace(intface.Name);
+                            trace(intface.getName());
+                            trace(intface);
+                            CTPath(toHxTypeName(intface.getName()));
+                        }
                     ],
                     meta: [mkNetLibMeta(asmName)],
 
@@ -156,8 +168,7 @@ class PECheckerTypes extends CheckerBase {
                             };
                             array.push(varDecl);
                             var getter = prop.GetMethod, setter = prop.SetMethod;
-                            if(getter != null) {
-
+                            if (getter != null) {
                                 var getDecl:FieldDecl = {
                                     name: getter.Name,
                                     meta: getClrMethodMeta(getter),
@@ -166,8 +177,7 @@ class PECheckerTypes extends CheckerBase {
                                 };
                                 array.push(getDecl);
                             }
-                            if(setter != null) {
-
+                            if (setter != null) {
                                 var setDecl:FieldDecl = {
                                     name: setter.Name,
                                     meta: getClrMethodMeta(setter),
@@ -176,7 +186,7 @@ class PECheckerTypes extends CheckerBase {
                                 };
                                 array.push(setDecl);
                             }
-                            
+
                             return array;
                         }, [])) // methods
                         .concat([
@@ -188,7 +198,7 @@ class PECheckerTypes extends CheckerBase {
                                     access: getClrMethodAccess(method)
                                 }
                         ]),
-                    extend: CTPath(toHxTypeName(type.BaseType.FullName))
+                    extend: if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null
                 };
                 addType(DClass(cclass));
             } else if (type.IsEnum) {} else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
@@ -198,13 +208,15 @@ class PECheckerTypes extends CheckerBase {
 
     function toHxTypeName(arg0:String, ?pos:haxe.PosInfos):Array<String> {
         trace(pos);
+        
         var parts = arg0.split('.');
-        if (parts[0] == "System")
-            parts.unshift('cs');
+        trace(parts);
         for (i in 0...parts.length - 1) {
             var part = parts[i];
-            part = part.substr(0, 1).toLowerCase() + part.substr(1);
+            parts[i] = part.substr(0, 1).toLowerCase() + part.substr(1);
         }
+        if (parts[0] == "system")
+            parts.unshift('cs');
         return parts;
     }
 
@@ -222,11 +234,15 @@ class PECheckerTypes extends CheckerBase {
             access.push(APrivate);
         return access;
     }
-
+    // @formatter:off
     function getClrVarDecl(field:FieldInfo):VarDecl {
-        // TODO: something with... field.FieldType.IsGenericType 
+        // TODO: something with... field.FieldType.IsGenericType
+        var type = if (field.FieldType.IsGenericParameter) CTParam(field.FieldType.Name) 
+                    else CTPath(toHxTypeName(if (field.FieldType.getName() == null)
+                            field.FieldType.Name else field.FieldType.getName())
+                    );
         var decl:VarDecl = {
-            type: CTPath(toHxTypeName(if (field.FieldType.FullName == null) field.FieldType.Name else field.FieldType.FullName)),
+            type:type,
             set: null,
             get: null,
             expr: null
@@ -248,16 +264,30 @@ class PECheckerTypes extends CheckerBase {
             access.push(APrivate);
         return access;
     }
-
+    
     function getClrMethodDecl(method:MethodInfo):FunctionDecl {
+        var retType = if (method.ReturnType.IsGenericParameter) CTParam(method.ReturnType.Name) 
+        else CTPath(toHxTypeName(if (method.ReturnType != null) 
+                                    if (method.ReturnType.getName() != null) method.ReturnType.getName() 
+                                    else method.ReturnType.Name 
+                                else "System.Void"
+                    )
+            );
         var decl:FunctionDecl = {
-            ret: CTPath(toHxTypeName(if (method.ReturnType != null) if (method.ReturnType.FullName != null) method.ReturnType.FullName else method.ReturnType.Name else "System.Void")),
+            ret: retType,
             args: [
-                for (parameter in cs.Lib.array(method.GetParameters()).map(p -> {type: p.ParameterType, name: p.Name, opt: p.IsOptional}))
+                for (parameter in cs.Lib.array(method.GetParameters()).map(p -> {type: p.ParameterType, name: p.Name, opt: p.IsOptional})) {
+                    var paramType = if(parameter.type.IsGenericParameter) CTParam(parameter.type.Name) 
+                                    else CTPath(toHxTypeName(
+                                        if (parameter.type.getName() == null) parameter.type.Name 
+                                        else parameter.type.getName())
+                                    );
                     ({
-                        t:CTPath(toHxTypeName(if (parameter.type.FullName == null) parameter.type.Name else parameter.type.FullName)), name:parameter.name,
+                        t:paramType, 
+                        name:parameter.name,
                         opt:parameter.opt
-                    } : hscript.Argument)
+                    } : hscript.Argument);
+                }
             ],
             expr: null
         }
@@ -269,18 +299,18 @@ class PECheckerTypes extends CheckerBase {
     }
 
     function getClrPropertyDecl(property:PropertyInfo):VarDecl {
-        trace(property.PropertyType.FullName);
-        var name = if (property.PropertyType.FullName == null) property.PropertyType.Name else property.PropertyType.FullName;
-        trace(name);
+        trace(property.PropertyType.getName());
+        var type = if(property.PropertyType.IsGenericParameter) CTParam(property.PropertyType.Name) 
+                    else CTPath(toHxTypeName(property.PropertyType.getName()));
         var decl:VarDecl = {
-            type: CTPath(toHxTypeName(name)),
+            type: type,
             set: if (property.GetMethod != null) property.GetMethod.Name else null,
             get: if (property.SetMethod != null) property.SetMethod.Name else null,
             expr: null
         };
         return decl;
     }
-
+    // @formatter:on
     function getClrPropertyAccess(property:PropertyInfo):Array<FieldAccess> {
         var access = [];
         return access;

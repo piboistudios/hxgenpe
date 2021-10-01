@@ -38,7 +38,6 @@ import mono.ilasm.ExternTypeRef;
 import mono.ilasm.GenericArguments;
 import haxe.exceptions.NotImplementedException;
 import mono.ilasm.BaseGenericTypeRef;
-import cs.system.reflection.SignatureGenericParameterType;
 import mono.ilasm.TypeDef;
 
 using hscript.Tools;

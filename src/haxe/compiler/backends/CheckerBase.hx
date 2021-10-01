@@ -16,8 +16,8 @@ class CheckerBase implements GenCheckerTypes {
             return TNull(args[0]);
         }
         var t = types.get(name);
-        if (t == null)
-            return null;
+        if (t == null) // TODO: Need to define types as they are encountered when parsing class libs...
+            return TUnresolved(name);
         if (args == null)
             args = [];
         return switch (t) {
