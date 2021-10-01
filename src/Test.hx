@@ -20,10 +20,11 @@ import mono.ilasm.CodeGen;
 
 class Test {
     public static function main() {
+        // trace(parser.parseString('cs.system.Console.WriteLine("what")'));
         testGen();
         generateHelloWorld();
     }
-
+    static var parser = new hscript.Parser();
     static function testGen() {
         var module = '
 package test;
@@ -33,7 +34,7 @@ class Test {
         var t = "Hello, World!";
         var cond = true;
         try {
-            if(cond) for(i in 0...10) cs.system.Console.WriteLine(i++);
+            if(cond) for(i in 0...10) cs.system.Console.WriteLine(t, null);
         } catch(e:System.Exception) {
             trace(e);
         }
@@ -44,7 +45,7 @@ class Test {
         var begin = haxe.Timer.stamp();
         var gen = new GenPE("test.module.exe", false, false, false);
         gen.setMainClass("test.Test");
-        var parser = new hscript.Parser();
+        
         var output = gen.buildHscript('Test', parser.parseModule(module));
         trace('got binaries in ${haxe.Timer.stamp() - begin}s');
         sys.io.File.saveBytes('./test.module.exe', output);

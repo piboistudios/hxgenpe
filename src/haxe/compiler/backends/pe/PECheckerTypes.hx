@@ -18,12 +18,7 @@ class PECheckerTypes extends CheckerBase {
     var currentPack = '';
 
     public function new() {
-        t_string = TInst({
-            name: "System.String",
-            statics: [],
-            params: [],
-            fields: []
-        }, []);
+        t_string = TUnresolved("cs.system.String");
     }
 
     public override function setPack(pk) {
@@ -34,7 +29,7 @@ class PECheckerTypes extends CheckerBase {
         return if(ret == null) "<Unknown>" else ret;
     }
     public override function addType(decl:ModuleDecl) {
-        trace('Adding $decl');
+        // trace('Adding $decl');
         var name = currentPack;
         var type:CTypedecl = switch decl {
             case DClass(c):
@@ -69,8 +64,9 @@ class PECheckerTypes extends CheckerBase {
                 null;
         }
         if (type != null) {
-            trace('Adding type: $type\r\n$type');
+            // trace('Adding type: $type\r\n$type');
             types.set(name, type);
+            checker.setGlobal(name, TType({name: name, t: resolve(name), params:[]}, []));
         }
     }
 
@@ -127,11 +123,11 @@ class PECheckerTypes extends CheckerBase {
         var allTypes = [];
         for (type in types) {
             if(!type.IsVisible) {
-                trace('Skipping ${type.Name}');
+                // trace('Skipping ${type.Name}');
                 continue;
             }
             if (type.IsClass) {
-                trace(type.getName());
+                // trace(type.getName());
                 var cclass:ClassDecl = {
                     name: toHxTypeName(type.getName()).join('.'),
                     params: {}, // TODO: hscript generic params
@@ -139,9 +135,9 @@ class PECheckerTypes extends CheckerBase {
                     isExtern: true,
                     implement: [
                         for (intface in type.GetInterfaces()) {
-                            trace(intface.Name);
-                            trace(intface.getName());
-                            trace(intface);
+                            // trace(intface.Name);
+                            // trace(intface.getName());
+                            // trace(intface);
                             CTPath(toHxTypeName(intface.getName()));
                         }
                     ],
@@ -159,7 +155,7 @@ class PECheckerTypes extends CheckerBase {
                     ] // properties
                         .concat(cs.Lib.array(type.GetProperties()).fold((prop, a) -> {
                             var array:Array<FieldDecl> = a;
-                            trace(prop);
+                            // trace(prop);
                             var varDecl:FieldDecl = {
                                 name: prop.Name,
                                 meta: getClrPropertyMeta(prop),
@@ -207,10 +203,10 @@ class PECheckerTypes extends CheckerBase {
     }
 
     function toHxTypeName(arg0:String, ?pos:haxe.PosInfos):Array<String> {
-        trace(pos);
+        // trace(pos);
         
         var parts = arg0.split('.');
-        trace(parts);
+        // trace(parts);
         for (i in 0...parts.length - 1) {
             var part = parts[i];
             parts[i] = part.substr(0, 1).toLowerCase() + part.substr(1);
@@ -299,7 +295,7 @@ class PECheckerTypes extends CheckerBase {
     }
 
     function getClrPropertyDecl(property:PropertyInfo):VarDecl {
-        trace(property.PropertyType.getName());
+        // trace(property.PropertyType.getName());
         var type = if(property.PropertyType.IsGenericParameter) CTParam(property.PropertyType.Name) 
                     else CTPath(toHxTypeName(property.PropertyType.getName()));
         var decl:VarDecl = {

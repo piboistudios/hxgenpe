@@ -8,7 +8,7 @@ class CheckerBase implements GenCheckerTypes {
     public var checker:Checker;
 
     var localParams:Map<String, TType>;
-
+    var previouslyUnresolved = [];
     public function resolve(name:String, ?args:Array<TType>):TType {
         if (name == "Null") {
             if (args == null || args.length != 1)
@@ -16,17 +16,25 @@ class CheckerBase implements GenCheckerTypes {
             return TNull(args[0]);
         }
         var t = types.get(name);
-        if (t == null) // TODO: Need to define types as they are encountered when parsing class libs...
+        if (t == null){ // TODO: Need to define types as they are encountered when parsing class libs...{
+            // trace('unable to resolve $name');
+            previouslyUnresolved.push(name);
             return TUnresolved(name);
+        } 
         if (args == null)
             args = [];
-        return switch (t) {
+        var ret = switch (t) {
             case CTClass(c): TInst(c, args);
             case CTEnum(e): TEnum(e, args);
             case CTTypedef(t): TType(t, args);
             case CTAbstract(a): TAbstract(a, args);
             case CTAlias(t): t;
         }
+        if(previouslyUnresolved.indexOf(name) != -1) {
+            @:privateAccess trace('resolved $name to ${Checker.typeStr(ret)}');
+            previouslyUnresolved.remove(name);
+        }
+        return ret;
     }
 
     public function getType(name:String, ?args:Array<TType>):TType {
