@@ -806,84 +806,84 @@ class GenPE extends Gen {
         // 1. Resolve the method to be called
         // 2. Put the parameters on the stack, and perform conversions as necessary
         // 3. Handle calling convention (generic, native, standard, virtual)
-        var method = resolveMethod(e, params);
-        var args = [];
-        var ret = null;
-        switch method.field.t {
-            case TFun(a, r):
-                args = a;
-                ret = r;
+        // var method = throw new NotImplementedException();
+        // var args = [];
+        // var ret = null;
+        // switch method.field.t {
+        //     case TFun(a, r):
+        //         args = a;
+        //         ret = r;
                 
-            default: throw 'invalid function type ${Checker.typeStr(method.field.t)}';
-        }
-        if(method.caller != null && method.field.kind != StaticMethod) {
-            mapToClrMethodBody(method.caller.expr, gen.CurrentMethodDef, null, method.caller.type);
-        }
-        for(i in 0...params.length) {
-            var param = params[i];
-            var arg = args[i];
-            var argType = arg.t;
-            params[i] = doConversion(param,argType);
-            mapToClrMethodBody(params[i], gen.CurrentMethodDef, ret, argType);
-        }
-        var methodParams = method.field.params;
-        var methodArgs = [];
-        switch method.field.t {
-            case TFun(args, ret):
-                methodArgs = args;
-            default:
-        }
-        switch method.field.kind {
-            case Closure: // probably use function pointers...
-            case InstanceMethod|StaticMethod: // probably need more kinds... 
-                            // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
-                var callConv:Int = 0;
-                callConv |= cast if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
+        //     default: throw 'invalid function type ${Checker.typeStr(method.field.t)}';
+        // }
+        // if(method.caller != null && method.field.kind != StaticMethod) {
+        //     mapToClrMethodBody(method.caller.expr, gen.CurrentMethodDef, null, method.caller.type);
+        // }
+        // for(i in 0...params.length) {
+        //     var param = params[i];
+        //     var arg = args[i];
+        //     var argType = arg.t;
+        //     params[i] = doConversion(param,argType);
+        //     mapToClrMethodBody(params[i], gen.CurrentMethodDef, ret, argType);
+        // }
+        // var methodParams = method.field.params;
+        // var methodArgs = [];
+        // switch method.field.t {
+        //     case TFun(args, ret):
+        //         methodArgs = args;
+        //     default:
+        // }
+        // switch method.field.kind {
+        //     case Closure: // probably use function pointers...
+        //     case InstanceMethod|StaticMethod: // probably need more kinds... 
+        //                     // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
+        //         var callConv:Int = 0;
+        //         callConv |= cast if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
                 
                 
-                if(methodParams.length != 0) callConv |= cast CallConv.Generic;
-                var genericArguments = if(methodParams != null && methodParams.length != 0) new GenericArguments() else null;
-                if(genericArguments != null) {
-                    // resolve generic params
-                    var slots = [for(param in methodParams) {
-                        var paramName = switch param {
-                            case TParam(name): name;
-                            default: null;
-                        }
-                        if(paramName == null) throw 'invalid generic parameter: $param';
-                        var slot:Null<Int> = null;
-                        for(i in 0...methodArgs.length) {
-                            var arg = args[i];
-                            switch arg.t {
-                                case TParam(name) if(paramName == name):
-                                    slot = i;
-                                    break;
-                                default:
-                            }
-                        }
-                        if(slot == null) switch retType {
-                            case TParam(name) if(paramName == name):
-                                slot = -1;
-                            default:
-                        }
-                        slot;
-                    }];
-                    for(i in 0...methodParams.length) {
-                        var slot = slots[0];
-                        if(slot == null) throw 'unable to resolve generic parameter: ${methodParams[i]}';
-                        genericArguments.Add(toClrTypeRef(if(slot == -1) retType else types.checker.check(params[i])));
-                    }
-                }
-                var callerClrType = toClrTypeRef(method.caller.type);
-                var retClrType = toClrTypeRef(ret);
-                var genParamCount = 0;
-                if(genParamCount != 0) callConv |= cast CallConv.Generic;
-                var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
-                var methRef = callerClrType.GetMethodRef(retClrType,cast  callConv, method.field.name, clrParamTypes, genParamCount);
-                if(genericArguments != null) methRef.GetGenericMethodRef(genericArguments);
-                methodInstr(MethodOp.call, methRef, e.location());
-            case Module:
-        }
+        //         if(methodParams.length != 0) callConv |= cast CallConv.Generic;
+        //         var genericArguments = if(methodParams != null && methodParams.length != 0) new GenericArguments() else null;
+        //         if(genericArguments != null) {
+        //             // resolve generic params
+        //             var slots = [for(param in methodParams) {
+        //                 var paramName = switch param {
+        //                     case TParam(name): name;
+        //                     default: null;
+        //                 }
+        //                 if(paramName == null) throw 'invalid generic parameter: $param';
+        //                 var slot:Null<Int> = null;
+        //                 for(i in 0...methodArgs.length) {
+        //                     var arg = args[i];
+        //                     switch arg.t {
+        //                         case TParam(name) if(paramName == name):
+        //                             slot = i;
+        //                             break;
+        //                         default:
+        //                     }
+        //                 }
+        //                 if(slot == null) switch retType {
+        //                     case TParam(name) if(paramName == name):
+        //                         slot = -1;
+        //                     default:
+        //                 }
+        //                 slot;
+        //             }];
+        //             for(i in 0...methodParams.length) {
+        //                 var slot = slots[0];
+        //                 if(slot == null) throw 'unable to resolve generic parameter: ${methodParams[i]}';
+        //                 genericArguments.Add(toClrTypeRef(if(slot == -1) retType else types.checker.check(params[i])));
+        //             }
+        //         }
+        //         var callerClrType = toClrTypeRef(method.caller.type);
+        //         var retClrType = toClrTypeRef(ret);
+        //         var genParamCount = 0;
+        //         if(genParamCount != 0) callConv |= cast CallConv.Generic;
+        //         var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
+        //         var methRef = callerClrType.GetMethodRef(retClrType,cast  callConv, method.field.name, clrParamTypes, genParamCount);
+        //         if(genericArguments != null) methRef.GetGenericMethodRef(genericArguments);
+        //         methodInstr(MethodOp.call, methRef, e.location());
+        //     case Module:
+        // }
     }
 
     // so, to reference a field in CLR, you need to know if
