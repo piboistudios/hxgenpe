@@ -121,10 +121,18 @@ class PECheckerTypes extends CheckerBase {
         var asm = Assembly.LoadFrom('$asmName.dll');
         trace('loading $asm $asmName');
         // so.. I guess we need TypeInfo and not Type... just look at the implementation of Type.GetEnumValues vs. TypeInfo.GetEnumValues in mscorlib
-        var types:Array<cs.system.reflection.TypeInfo> = []; 
         var definedTypes = asm.DefinedTypes.GetEnumerator();
-        while(definedTypes.MoveNext()) types.push(definedTypes.Current);
-        trace('types: ${types.length}');
+        var current = null;
+        var types:Iterable<cs.system.reflection.TypeInfo> = {
+            iterator: () -> {
+                next: () -> current,
+                hasNext: () -> {
+                    var ret = definedTypes.MoveNext();
+                    current = if(ret) definedTypes.Current else null;
+                    ret;
+                }
+            }
+        };
         var allTypes = [];
         var asmMeta = mkNetLibMeta(asmName);
         for (type in types) {
