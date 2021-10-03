@@ -448,7 +448,7 @@ class GenPE extends Gen {
                     declareLocal(v, catchType);
                     firstPass(e);
                     firstPass(ecatch);
-                case EFunction(args, e, name, ret):
+                case EFunction(_,{ expr:e}):
                     e.iter(e -> switch e.expr() {
                         case EIdent(v):
                             if (isLocal(v)) {
@@ -550,19 +550,19 @@ class GenPE extends Gen {
                             // TODO: crap... forgot the checker needs locals loaded to it...
                             // TODO: crap, forgot again
                     }
-                case EFunction(args, e, name, ret):
+                case EFunction(kind, decl):
                     if (closure == null) {
                         closure = mkClosure();
                         closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
                     }
-
+                    var name:String = switch kind {
+                        case FAnonymous|FArrow: getAnonClosureName();
+                        case FNamed(name, inlined): // do something about inlining
+                            name;
+                    }
                     closure.methods.push({
                         name: name,
-                        f: {
-                            ret: ret,
-                            args: args,
-                            expr: e
-                        }
+                        f: decl
                     });
                 case EArray(e, index): // array access
                 // if has an indexer decl, do indexer access
@@ -768,25 +768,25 @@ class GenPE extends Gen {
                     handleIdent(v, e.location());
                 default:
             }
-            if (prefix) {
-                noneInstr(peapi.Op.ldc_i4_1, e.location());
-                noneInstr(opCode, e.location());
-                setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
-                handleIdent(ident, e.location());
-            }
+            
+            noneInstr(peapi.Op.ldc_i4_1, e.location());
+            noneInstr(opCode, e.location());
+            setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
+            handleIdent(ident, e.location());
+        
         }
         function post() {
-            if (!prefix) {
-                switch e.expr() {
-                    case EIdent(v):
-                        ident = v;
-                        handleIdent(v, e.location());
-                    default:
-                }
-                noneInstr(peapi.Op.ldc_i4_1, e.location());
-                noneInstr(opCode, e.location());
-                setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
+            
+            switch e.expr() {
+                case EIdent(v):
+                    ident = v;
+                    handleIdent(v, e.location());
+                default:
             }
+            noneInstr(peapi.Op.ldc_i4_1, e.location());
+            noneInstr(opCode, e.location());
+            setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
+            
         }
         switch type {
             case TInt | TFloat: // lets only handle numbers for now...
@@ -796,8 +796,8 @@ class GenPE extends Gen {
                 }
             default:
         }
-        pre();
-        next = post;
+        if(prefix) pre();
+        if(!prefix) next = post;
     }
 
     function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
@@ -1072,6 +1072,12 @@ class GenPE extends Gen {
             gen.EndAssemblyRef();
         }
     }
+
+	
+
+	function getAnonClosureName():String {
+		throw new haxe.exceptions.NotImplementedException();
+	}
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};

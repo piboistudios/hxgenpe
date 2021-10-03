@@ -4,11 +4,13 @@ import mono.ilasm.BaseClassRef;
 
 class CheckerBase implements GenCheckerTypes {
     var types:Map<String, CTypedecl> = new Map();
-
+    var decls:Map<String, ModuleDecl> = new Map();
     public var checker:Checker;
 
     var localParams:Map<String, TType>;
     var previouslyUnresolved = [];
+
+    public function lookup(name:String) return decls[name];
     public function resolve(name:String, ?args:Array<TType>):TType {
         if (name == "Null") {
             if (args == null || args.length != 1)

@@ -1,5 +1,6 @@
 package haxe.compiler.backends.pe;
 
+import cs.system.collections.generic.IEnumerable_1;
 import cs.system.reflection.PropertyInfo;
 import cs.system.reflection.MethodInfo;
 import cs.system.reflection.MethodInfo;
@@ -39,11 +40,11 @@ class PECheckerTypes extends CheckerBase {
                     name: name,
                     fields: [
                         for (f in c.fields.filter(field -> !field.access.contains(FieldAccess.AStatic)).map(toCField))
-                            f.name => f
+                            f
                     ],
                     statics: [
                         for (f in c.fields.filter(field -> field.access.contains(FieldAccess.AStatic)).map(toCField))
-                            f.name => f
+                            f
                     ],
                     params: []
                 };
@@ -66,6 +67,7 @@ class PECheckerTypes extends CheckerBase {
         if (type != null) {
             // trace('Adding type: $type\r\n$type');
             types.set(name, type);
+            decls.set(name, decl);
             checker.setGlobal(name, TType({name: name, t: resolve(name), params:[]}, []));
         }
     }
@@ -118,20 +120,28 @@ class PECheckerTypes extends CheckerBase {
     public function loadAssembly(asmName) {
         var asm = Assembly.LoadFrom('$asmName.dll');
         trace('loading $asm $asmName');
-        var types = asm.GetTypes();
+        // so.. I guess we need TypeInfo and not Type... just look at the implementation of Type.GetEnumValues vs. TypeInfo.GetEnumValues in mscorlib
+        var types:Array<cs.system.reflection.TypeInfo> = []; 
+        var definedTypes = asm.DefinedTypes.GetEnumerator();
+        while(definedTypes.MoveNext()) types.push(definedTypes.Current);
         trace('types: ${types.length}');
         var allTypes = [];
+        var asmMeta = mkNetLibMeta(asmName);
         for (type in types) {
             if(!type.IsVisible) {
                 // trace('Skipping ${type.Name}');
                 continue;
             }
+            var isPrivate = type.IsNotPublic;
             if (type.IsClass) {
                 // trace(type.getName());
                 var cclass:ClassDecl = {
                     name: toHxTypeName(type.getName()).join('.'),
-                    params: {}, // TODO: hscript generic params
-                    isPrivate: type.IsNotPublic,
+                    params: [for(typeParam in type.GenericTypeArguments) {
+                        name: typeParam.Name
+                        // I guess just ignore constraints or whatever and see what chaos ensues
+                    }], // TODO: hscript generic params
+                    isPrivate: isPrivate,
                     isExtern: true,
                     implement: [
                         for (intface in type.GetInterfaces()) {
@@ -141,7 +151,7 @@ class PECheckerTypes extends CheckerBase {
                             CTPath(toHxTypeName(intface.getName()));
                         }
                     ],
-                    meta: [mkNetLibMeta(asmName)],
+                    meta: [asmMeta],
 
                     fields: [
                         // variables
@@ -197,7 +207,17 @@ class PECheckerTypes extends CheckerBase {
                     extend: if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null
                 };
                 addType(DClass(cclass));
-            } else if (type.IsEnum) {} else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
+            } else if (type.IsEnum) {
+                var eenum:EnumDecl = {
+                    params: [], // no GADTs  in CLR, thank god :)
+                    name: type.FullName,
+                    meta: [asmMeta],
+                    isPrivate: isPrivate,
+                    isExtern: true,
+                    fields: mkEnumFields(type)
+                };
+                addType(DEnum(eenum));
+            } else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
             // if(decl != null) addType(decl);
         }
     }
@@ -311,4 +331,8 @@ class PECheckerTypes extends CheckerBase {
         var access = [];
         return access;
     }
+
+	function mkEnumFields(type:cs.system.Type):Array<FieldDecl> {
+		throw new haxe.exceptions.NotImplementedException();
+	}
 }
