@@ -463,6 +463,9 @@ class GenPE extends Gen {
         }
         function doMap(e:Expr)
             switch e.expr() {
+                case EIdent('null'): 
+                    noneInstr(peapi.Op.ldnull, e.location());
+                    after();
                 case EIdent('true'): // this should be EConst.CBool(v)...
                     noneInstr(peapi.Op.ldc_i4_1, e.location());
                     after();
@@ -792,10 +795,8 @@ class GenPE extends Gen {
     function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
 
     function handleCall(e:Expr, funcType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType:TType) {
-        // 1. Resolve the method to be called
-        // 2. Put the parameters on the stack, and perform conversions as necessary
-        // 3. Handle calling convention (generic, native, standard, virtual)
-        //
+        
+        // so first we had to set up a hell of a lot of state
 
         var methodName = '';
         var callerType = types.checker.check(e);
@@ -819,8 +820,7 @@ class GenPE extends Gen {
             default: throw 'assert';
         }
 
-        var retClrType = toClrTypeRef(retType);
-        var callConv = 0;
+        
         var genericParamMap:Map<Int, BaseTypeRef> = [];
         for (i in 0...funcArgs.length) {
             var funcArg = funcArgs[i];
@@ -843,12 +843,12 @@ class GenPE extends Gen {
                         }
                     default:
                 }
-            } else {
+            } else { //if they don't unify...
                 if (!funcArg.opt)
                     throw 'parameter type mismatch in call expression (have: ${paramType.typeStr()}, want: ${funcArg.t.typeStr()} )';
-                else {
+                else { // and its not optional
                     paramTypes.insert(i, funcArg.t);
-                    params.insert(i, EIdent('null').mk(null));
+                    params.insert(i, EIdent('null').mk(null)); // pass null value in for this arg...
                 }
             }
         }
@@ -865,20 +865,28 @@ class GenPE extends Gen {
                 default:
             }
         }
+
+        // yes... all of that just to set up state for generic parameters (and also handle optional params)
         var genericArguments = if (genericParamCount != 0) new GenericArguments() else null;
         if (genericArguments != null)
             for (i in 0...genericParamMap.list().length) {
                 genericArguments.Add(genericParamMap[i]);
             }
 
-        callConv |= cast if (isInstanceMethod)
+        var callConv = if (isInstanceMethod)
             CallConv.Instance
         else
             CallConv.Default;
-        var methRef = callerClrType.GetMethodRef(retClrType, cast callConv, methodName,
+
+
+        var retClrType = toClrTypeRef(retType);
+
+        var methRef = callerClrType.GetMethodRef(retClrType, callConv, methodName,
             cs.Lib.nativeArray([for (funcArg in funcArgs) toClrTypeRef(funcArg.t)], true), genericParamCount);
         if (genericArguments != null)
             methRef.GetGenericMethodRef(genericArguments);
+        // and finally... do the actual mapping to CLR body
+
         // If it's not static, put the instance on the stack
         if (isInstanceMethod) {
             mapToClrMethodBody(e, gen.CurrentMethodDef, null, callerType);
