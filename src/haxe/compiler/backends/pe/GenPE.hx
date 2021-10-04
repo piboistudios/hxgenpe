@@ -208,19 +208,14 @@ class GenPE extends Gen {
     function generateMethod(owner:String, field:FieldDecl, f:FunctionDecl) {
         var flags = getClrFlags(field, [cast MethAttr.Public, cast MethAttr.Static, cast MethAttr.Private]);
         flags |= cast MethAttr.HideBySig;
-        if (isSpecialName(field.name))
-            flags |= cast MethAttr.RTSpecialName;
-
-        var conv:Int = cast peapi.CallConv.Default;
-        if (field.name == 'new') {
+        if (isSpecialName(field.name)) {
             flags |= cast MethAttr.SpecialName;
             flags |= cast MethAttr.RTSpecialName;
         }
-        if (field.access.contains(AStatic)) {
-            // what?
-            // var func = EFunction(f.args, f.expr, field.name, f.ret).mk(f.expr);
-            // evaluatedStaticSets[owner].set(field.name, interp.execute(func));
-        } else {
+
+        var conv:Int = cast peapi.CallConv.Default;
+        
+        if (!field.access.contains(AStatic)) {
             conv |= cast CallConv.Instance;
         }
         if (false) { // check if f has params...
@@ -941,15 +936,13 @@ class GenPE extends Gen {
         for(name => decl in closure.methods) {
             var flags:Int = cast MethAttr.Public;
             flags |= cast MethAttr.HideBySig;
-            if (isSpecialName(name))
-                flags |= cast MethAttr.RTSpecialName;
-
-            var conv= peapi.CallConv.Instance;
-            if (name == 'new') {
+            if (isSpecialName(name)) {
                 flags |= cast MethAttr.SpecialName;
                 flags |= cast MethAttr.RTSpecialName;
             }
 
+            var conv= peapi.CallConv.Instance;
+           
             var implAttr = ImplAttr.IL;
             var retType = types.checker.makeType(decl.ret);
             var retClrType = toClrTypeRef(retType);
@@ -963,8 +956,9 @@ class GenPE extends Gen {
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
             method.SetMaxStack(8); 
             mapToClrMethodBody(decl.expr, method, retType);
-
+            gen.EndMethodDef(new Location(0,0));
         }
+        gen.EndTypeDef();
 
         
     }
@@ -1049,7 +1043,8 @@ class GenPE extends Gen {
     // @formatter:off
     static var specialNames = [
         '.ctor',            // CONSTRUCTOR
-        '.cctor'            // CLASS CONSTRUCTOR
+        '.cctor',            // CLASS CONSTRUCTOR
+        'new',                  // HAXE CONSTRUCTOR
     ];
     // @formatter:on
     function isSpecialName(arg0:String)
