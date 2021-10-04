@@ -188,9 +188,8 @@ class GenPE extends Gen {
                         }
                     }
                     generateConstructor();
-                    afterType();
                     gen.EndTypeDef();
-
+                    afterType();
                 default:
             }
     }
