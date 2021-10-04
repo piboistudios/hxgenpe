@@ -72,10 +72,10 @@ import mono.ilasm.CodeGen;
 
 using Lambda;
 using StringTools;
+using hscript.Checker;
 using haxe.compiler.backends.pe.GenPE;
 
 typedef Deferred = Array<Void->Void>;
-
 
 class GenPE extends Gen {
     public var gen:CodeGen;
@@ -227,7 +227,8 @@ class GenPE extends Gen {
         var ownerType = gen.CurrentTypeDef; // lookupType(owner).toClrTypeDef(this);
         var paramList = new cs.system.collections.ArrayList();
         for (arg in f.args)
-            paramList.Add(if (arg.value == null) types.checker.makeType(arg.t, arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value))));
+            paramList.Add(if (arg.value == null) types.checker.makeType(arg.t,
+                arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value))));
 
         var genericParameters = null;
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
@@ -280,7 +281,8 @@ class GenPE extends Gen {
         // }
         var flags = getClrFlags(field, [cast FieldAttr.Public, cast FieldAttr.Static, cast FieldAttr.Private]);
         var name = field.name;
-        var type = if (v.expr != null) types.checker.check(v.expr, WithType(types.checker.makeType(v.type, v.expr))) else types.checker.makeType(v.type, v.expr);
+        var type = if (v.expr != null) types.checker.check(v.expr,
+            WithType(types.checker.makeType(v.type, v.expr))) else types.checker.makeType(v.type, v.expr);
         var clrType = toClrTypeRef(type);
         var field = new FieldDef(flags, name, clrType);
         gen.AddFieldDef(field);
@@ -330,7 +332,7 @@ class GenPE extends Gen {
                 case TAnon(fields): getDynamicTypeRef();
                 default:
                     throw 'Error, invalid type: $t';
-                case TParam(name):
+                case TParam(name, index):
                     /*
                         This is what needs to happen for TParam
                         From ILParser.jay...
@@ -395,7 +397,7 @@ class GenPE extends Gen {
             if (_after != null)
                 _after();
         inline function before()
-            if(_before != null)
+            if (_before != null)
                 _before();
         inline function doIf(e:Expr, cond:Expr, e1:Expr, e2:Null<Expr>) {
             // var branchEnd:LabelInfo = null;
@@ -448,7 +450,7 @@ class GenPE extends Gen {
                     declareLocal(v, catchType);
                     firstPass(e);
                     firstPass(ecatch);
-                case EFunction(_,{ expr:e}):
+                case EFunction(_, {expr: e}):
                     e.iter(e -> switch e.expr() {
                         case EIdent(v):
                             if (isLocal(v)) {
@@ -511,7 +513,7 @@ class GenPE extends Gen {
                 case ECall(e, params):
                     var funcType = types.checker.check(e, with);
                     // i think potentially withType below should be the ret from TFun above..
-                    handleCall(e, funcType, params, withType);
+                    handleCall(e, funcType, params, [for (param in params) types.checker.check(param)], withType);
                     after();
                 case EIf(cond, e1, e2):
                     doIf(e, cond, e1, e2);
@@ -551,19 +553,7 @@ class GenPE extends Gen {
                             // TODO: crap, forgot again
                     }
                 case EFunction(kind, decl):
-                    if (closure == null) {
-                        closure = mkClosure();
-                        closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
-                    }
-                    var name:String = switch kind {
-                        case FAnonymous|FArrow: getAnonClosureName();
-                        case FNamed(name, inlined): // do something about inlining
-                            name;
-                    }
-                    closure.methods.push({
-                        name: name,
-                        f: decl
-                    });
+                    addToClosure(kind, decl);
                 case EArray(e, index): // array access
                 // if has an indexer decl, do indexer access
                 // e.g. .method public final hidebysig virtual newslot specialname instance !0/*T*/ get_Item
@@ -591,7 +581,7 @@ class GenPE extends Gen {
                     }
                     var catchType = toClrTypeRef(types.checker.makeType(t, expr));
                     mapToClrMethodBody(e, method, ret, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
-                    
+
                     var tryBlock = new TryBlock(handlerBlock, e.location());
                     mapToClrMethodBody(ecatch, method, ret, withType, _after, () -> setVar(v, catchType, ecatch.location()));
                     brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
@@ -625,7 +615,7 @@ class GenPE extends Gen {
                     meta = {name: name, args: args, expr: e};
                     mapToClrMethodBody(e, method, ret, withType, _after);
                 case ECheckType(e, t): // or not
-                    mapToClrMethodBody(e, method, ret, types.checker.makeType(t,expr), _after);
+                    mapToClrMethodBody(e, method, ret, types.checker.makeType(t, expr), _after);
                 default:
             }
         if (expr.expr().match(EBlock(_))) {
@@ -768,15 +758,13 @@ class GenPE extends Gen {
                     handleIdent(v, e.location());
                 default:
             }
-            
+
             noneInstr(peapi.Op.ldc_i4_1, e.location());
             noneInstr(opCode, e.location());
             setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
             handleIdent(ident, e.location());
-        
         }
         function post() {
-            
             switch e.expr() {
                 case EIdent(v):
                     ident = v;
@@ -786,7 +774,6 @@ class GenPE extends Gen {
             noneInstr(peapi.Op.ldc_i4_1, e.location());
             noneInstr(opCode, e.location());
             setVar(ident, toClrTypeRef(types.checker.check(e)), e.location());
-            
         }
         switch type {
             case TInt | TFloat: // lets only handle numbers for now...
@@ -796,94 +783,116 @@ class GenPE extends Gen {
                 }
             default:
         }
-        if(prefix) pre();
-        if(!prefix) next = post;
+        if (prefix)
+            pre();
+        if (!prefix)
+            next = post;
     }
 
     function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
 
-    function handleCall(e:Expr, funcType:TType, params:Array<Expr>, retType:TType) {
+    function handleCall(e:Expr, funcType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType:TType) {
         // 1. Resolve the method to be called
         // 2. Put the parameters on the stack, and perform conversions as necessary
         // 3. Handle calling convention (generic, native, standard, virtual)
-        // var method = throw new NotImplementedException();
-        // var args = [];
-        // var ret = null;
-        // switch method.field.t {
-        //     case TFun(a, r):
-        //         args = a;
-        //         ret = r;
-                
-        //     default: throw 'invalid function type ${Checker.typeStr(method.field.t)}';
-        // }
-        // if(method.caller != null && method.field.kind != StaticMethod) {
-        //     mapToClrMethodBody(method.caller.expr, gen.CurrentMethodDef, null, method.caller.type);
-        // }
-        // for(i in 0...params.length) {
-        //     var param = params[i];
-        //     var arg = args[i];
-        //     var argType = arg.t;
-        //     params[i] = doConversion(param,argType);
-        //     mapToClrMethodBody(params[i], gen.CurrentMethodDef, ret, argType);
-        // }
-        // var methodParams = method.field.params;
-        // var methodArgs = [];
-        // switch method.field.t {
-        //     case TFun(args, ret):
-        //         methodArgs = args;
-        //     default:
-        // }
-        // switch method.field.kind {
-        //     case Closure: // probably use function pointers...
-        //     case InstanceMethod|StaticMethod: // probably need more kinds... 
-        //                     // there's 4 call opcodes: call, calli, callvirt and constrained. <T>
-        //         var callConv:Int = 0;
-        //         callConv |= cast if(method.field.kind == InstanceMethod) CallConv.Instance else CallConv.Default;
-                
-                
-        //         if(methodParams.length != 0) callConv |= cast CallConv.Generic;
-        //         var genericArguments = if(methodParams != null && methodParams.length != 0) new GenericArguments() else null;
-        //         if(genericArguments != null) {
-        //             // resolve generic params
-        //             var slots = [for(param in methodParams) {
-        //                 var paramName = switch param {
-        //                     case TParam(name): name;
-        //                     default: null;
-        //                 }
-        //                 if(paramName == null) throw 'invalid generic parameter: $param';
-        //                 var slot:Null<Int> = null;
-        //                 for(i in 0...methodArgs.length) {
-        //                     var arg = args[i];
-        //                     switch arg.t {
-        //                         case TParam(name) if(paramName == name):
-        //                             slot = i;
-        //                             break;
-        //                         default:
-        //                     }
-        //                 }
-        //                 if(slot == null) switch retType {
-        //                     case TParam(name) if(paramName == name):
-        //                         slot = -1;
-        //                     default:
-        //                 }
-        //                 slot;
-        //             }];
-        //             for(i in 0...methodParams.length) {
-        //                 var slot = slots[0];
-        //                 if(slot == null) throw 'unable to resolve generic parameter: ${methodParams[i]}';
-        //                 genericArguments.Add(toClrTypeRef(if(slot == -1) retType else types.checker.check(params[i])));
-        //             }
-        //         }
-        //         var callerClrType = toClrTypeRef(method.caller.type);
-        //         var retClrType = toClrTypeRef(ret);
-        //         var genParamCount = 0;
-        //         if(genParamCount != 0) callConv |= cast CallConv.Generic;
-        //         var clrParamTypes = cs.Lib.nativeArray([for(arg in args) toClrTypeRef(arg.t)], false);
-        //         var methRef = callerClrType.GetMethodRef(retClrType,cast  callConv, method.field.name, clrParamTypes, genParamCount);
-        //         if(genericArguments != null) methRef.GetGenericMethodRef(genericArguments);
-        //         methodInstr(MethodOp.call, methRef, e.location());
-        //     case Module:
-        // }
+        //
+
+        var methodName = '';
+        var callerType = types.checker.check(e);
+        var callerClrType = switch e.expr() {
+            case EField(e, f):
+                methodName = f;
+                toClrTypeRef(callerType);
+            case EIdent(v):
+                methodName = v;
+                closure.clrTypeRef;
+            case EFunction(k, f):
+                methodName = addToClosure(k, f);
+                closure.clrTypeRef;
+            default: throw 'assert';
+        }
+        var isInstanceMethod = !types.checker.isFieldStatic(callerType, methodName, paramTypes, retType);
+
+        var funcArgs = switch funcType {
+            case TFun(args, ret):
+                args;
+            default: throw 'assert';
+        }
+
+        var retClrType = toClrTypeRef(retType);
+        var callConv = 0;
+        var genericParamMap:Map<Int, BaseTypeRef> = [];
+        for (i in 0...funcArgs.length) {
+            var funcArg = funcArgs[i];
+            var paramType = paramTypes[i];
+            if (types.checker.tryUnify(funcArg.t, paramType)) {
+                // if the signature arg type and the arg expression type unify..
+                switch funcArg.t {
+                    // and the function arg type is a generic parameter...
+                    case TParam(name, index):
+                        genericParamMap.set(index, toClrTypeRef(paramType)); // map it by index
+                        for (i in i...funcArgs.length) { // loop through remaining signature arg types
+                            var funcArg = funcArgs[i];
+                            switch funcArg.t { // if the signature arg type is the same generic parameter
+                                case TParam(name2, index2) if (index == index2 && name == name2): funcArg.t = paramType;
+                                // change it to the type  we just unified with
+                                // this will prevent the same parameter from being remapped
+                                // as well as force them to unify
+                                default:
+                            }
+                        }
+                    default:
+                }
+            } else {
+                if (!funcArg.opt)
+                    throw 'parameter type mismatch in call expression (have: ${paramType.typeStr()}, want: ${funcArg.t.typeStr()} )';
+                else {
+                    paramTypes.insert(i, funcArg.t);
+                    params.insert(i, EIdent('null').mk(null));
+                }
+            }
+        }
+
+        var genericParamNames:Map<Int, String> = [];
+        var genericParamCount = 0;
+        for (paramType in funcArgs) {
+            switch paramType.t {
+                case TParam(param, i):
+                    if (genericParamNames.exists(i)) {
+                        genericParamNames.set(i, param);
+                        genericParamCount++;
+                    }
+                default:
+            }
+        }
+        var genericArguments = if (genericParamCount != 0) new GenericArguments() else null;
+        if (genericArguments != null)
+            for (i in 0...genericParamMap.list().length) {
+                genericArguments.Add(genericParamMap[i]);
+            }
+
+        callConv |= cast if (isInstanceMethod)
+            CallConv.Instance
+        else
+            CallConv.Default;
+        var methRef = callerClrType.GetMethodRef(retClrType, cast callConv, methodName,
+            cs.Lib.nativeArray([for (funcArg in funcArgs) toClrTypeRef(funcArg.t)], true), genericParamCount);
+        if (genericArguments != null)
+            methRef.GetGenericMethodRef(genericArguments);
+        // If it's not static, put the instance on the stack
+        if (isInstanceMethod) {
+            mapToClrMethodBody(e, gen.CurrentMethodDef, null, callerType);
+        }
+        // put the parameters on the stack
+        for (i in 0...params.length) {
+            var param = params[i];
+            var paramType = paramTypes[i];
+            var arg = funcArgs[i];
+            var argType = arg.t;
+            params[i] = doConversion(param, paramType, argType);
+            mapToClrMethodBody(params[i], gen.CurrentMethodDef, null, argType);
+        }
+        methodInstr(MethodOp.call, methRef, e.location());
     }
 
     // so, to reference a field in CLR, you need to know if
@@ -897,13 +906,7 @@ class GenPE extends Gen {
         } else if (closure != null && closure.locals.exists(e)) {
             localIdInstr(IntOp.ldloc_s, getClosureLocal(), location);
             var owner = gen.GetTypeRef(closure.name);
-            var type = toClrTypeRef(types.checker.check(EIdent(e).mk({
-                pmin: 0,
-                pmax: 0,
-                e: null,
-                origin: null,
-                line: 0
-            })));
+            var type = toClrTypeRef(types.checker.check(EIdent(e).mk(null)));
             fieldInstr(FieldOp.ldfld, type, owner, e, location);
         }
     }
@@ -1017,10 +1020,7 @@ class GenPE extends Gen {
         return if (asm != null) gen.ExternTable.GetTypeRef(asm, arg0, valueType); else gen.GetTypeRef(arg0);
     }
 
-    function init() {
-        
-    }
-    
+    function init() {}
 
     function getClosureLocal():String {
         throw new haxe.exceptions.NotImplementedException();
@@ -1058,29 +1058,46 @@ class GenPE extends Gen {
             arrList;
         });
     }
+
     // check if conversion is necessary, and if so, perform it
-	function doConversion(param:Expr, argType:TType):Expr {
-		throw new haxe.exceptions.NotImplementedException();
-	}
-    var externAssemblies = [
-        'mscorlib'
-    ];
-	function loadAssemblies() {
-        for(asm in externAssemblies) {
+    function doConversion(param:Expr, paramType:TType, argType:TType):Expr {
+        throw new haxe.exceptions.NotImplementedException();
+    }
+
+    var externAssemblies = ['mscorlib'];
+
+    function loadAssemblies() {
+        for (asm in externAssemblies) {
             gen.BeginAssemblyRef(asm, new AssemblyName(asm), peapi.AssemAttr.Retargetable);
             peTypes.loadAssembly(asm);
             gen.EndAssemblyRef();
         }
     }
 
-	
+    function getAnonClosureName():String {
+        throw new haxe.exceptions.NotImplementedException();
+    }
 
-	function getAnonClosureName():String {
-		throw new haxe.exceptions.NotImplementedException();
-	}
+    function addToClosure(kind:FunctionKind, decl:FunctionDecl) {
+        if (closure == null) {
+            closure = mkClosure();
+            closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
+        }
+        var name:String = switch kind {
+            case FAnonymous | FArrow: getAnonClosureName();
+            case FNamed(name, inlined): // do something about inlining
+                name;
+        }
+        closure.methods.push({
+            name: name,
+            f: decl
+        });
+        return name;
+    }
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
+
 class HscriptExprTools {
     public static inline function location(expr:hscript.Expr)
         return new Location(expr.line, expr.pmin);
@@ -1111,4 +1128,6 @@ interface Closure {
     var name:String;
     var locals:Map<String, BaseTypeRef>;
     var methods:Array<{name:String, f:FunctionDecl}>;
+
+    var clrTypeRef:BaseTypeRef;
 }

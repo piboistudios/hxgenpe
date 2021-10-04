@@ -261,7 +261,8 @@ class PECheckerTypes extends CheckerBase {
     // @formatter:off
     function getClrVarDecl(field:FieldInfo):VarDecl {
         // TODO: something with... field.FieldType.IsGenericType
-        var type = if (field.FieldType.IsGenericParameter) CTParam(field.FieldType.Name) 
+        
+        var type = if (field.FieldType.IsGenericParameter) CTParam(field.FieldType.Name, field.FieldType.GenericParameterPosition) 
                     else CTPath(toHxTypeName(if (field.FieldType.getName() == null)
                             field.FieldType.Name else field.FieldType.getName())
                     );
@@ -290,7 +291,7 @@ class PECheckerTypes extends CheckerBase {
     }
     
     function getClrMethodDecl(method:MethodInfo):FunctionDecl {
-        var retType = if (method.ReturnType.IsGenericParameter) CTParam(method.ReturnType.Name) 
+        var retType = if (method.ReturnType.IsGenericParameter) CTParam(method.ReturnType.Name, method.ReturnType.GenericParameterPosition) 
         else CTPath(toHxTypeName(if (method.ReturnType != null) 
                                     if (method.ReturnType.getName() != null) method.ReturnType.getName() 
                                     else method.ReturnType.Name 
@@ -301,7 +302,7 @@ class PECheckerTypes extends CheckerBase {
             ret: retType,
             args: [
                 for (parameter in cs.Lib.array(method.GetParameters()).map(p -> {type: p.ParameterType, name: p.Name, opt: p.IsOptional})) {
-                    var paramType = if(parameter.type.IsGenericParameter) CTParam(parameter.type.Name) 
+                    var paramType = if(parameter.type.IsGenericParameter) CTParam(parameter.type.Name, parameter.type.GenericParameterPosition) 
                                     else CTPath(toHxTypeName(
                                         if (parameter.type.getName() == null) parameter.type.Name 
                                         else parameter.type.getName())
@@ -324,7 +325,7 @@ class PECheckerTypes extends CheckerBase {
 
     function getClrPropertyDecl(property:PropertyInfo):VarDecl {
         // trace(property.PropertyType.getName());
-        var type = if(property.PropertyType.IsGenericParameter) CTParam(property.PropertyType.Name) 
+        var type = if(property.PropertyType.IsGenericParameter) CTParam(property.PropertyType.Name, property.PropertyType.GenericParameterPosition) 
                     else CTPath(toHxTypeName(property.PropertyType.getName()));
         var decl:VarDecl = {
             type: type,
