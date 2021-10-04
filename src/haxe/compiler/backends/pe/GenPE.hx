@@ -1,5 +1,9 @@
 package haxe.compiler.backends.pe;
 
+import peapi.GenericParamConstraint;
+import peapi.GenericParamAttributes;
+import mono.ilasm.GenericParameter;
+import mono.ilasm.GenericParameters;
 import haxe.compiler.backends.Core.Gen;
 import hscript.Printer;
 import cs.system.reflection.AssemblyName;
@@ -164,8 +168,13 @@ class GenPE extends Gen {
                         flags = flags | cast TypeAttr.Private;
                     else
                         flags = flags | cast TypeAttr.Public;
+                    var superCl = switch c.extend {
+                        case CTPath(path, params): '${path.join('.')}';
+                        default: null;
+                    }
 
-                    gen.BeginTypeDef(cast flags, c.name.split('.').pop(), null, null, type.location(), null);
+                    var superType = if (superCl != null) gen.GetTypeRef(superCl); else null;
+                    gen.BeginTypeDef(cast flags, c.name.split('.').pop(), superType, null, type.location(), null);
                     for (field in c.fields) {
                         switch field.kind {
                             case KFunction(f):
@@ -229,8 +238,8 @@ class GenPE extends Gen {
         for (arg in f.args)
             paramList.Add(if (arg.value == null) types.checker.makeType(arg.t,
                 arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value))));
+        var genericParameters = getGenericParameters(f);
 
-        var genericParameters = null;
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
 
         if (field.name == "main" && owner == mainClass)
@@ -240,14 +249,13 @@ class GenPE extends Gen {
         // BUT by default .NET allows unverifiable PEs so.... is it worth the bother? Not right now
         labelRefCount = [];
         locals = [];
-        closure = null;
         mapToClrMethodBody(f.expr, method, ret);
         generateLocals();
         if (retType.FullName == "System.Void") {
             noneInstr(peapi.Op.ret, f.expr.location());
         }
         if (closure != null)
-            beforeNextType.push(() -> defineClosure(closure));
+            beforeNextType.push(() -> defineClosure());
         gen.EndMethodDef(f.expr.location());
     }
 
@@ -463,7 +471,7 @@ class GenPE extends Gen {
         }
         function doMap(e:Expr)
             switch e.expr() {
-                case EIdent('null'): 
+                case EIdent('null'):
                     noneInstr(peapi.Op.ldnull, e.location());
                     after();
                 case EIdent('true'): // this should be EConst.CBool(v)...
@@ -556,7 +564,10 @@ class GenPE extends Gen {
                             // TODO: crap, forgot again
                     }
                 case EFunction(kind, decl):
-                    addToClosure(kind, decl);
+                    var closureMethod = addToClosure(kind, decl);
+                    var fieldExpr = EField(EIdent(getClosureLocal()).mk(e), closureMethod).mk(e);
+                    // <closureLocal>.<closureMethod>;
+                    mapToClrMethodBody(fieldExpr, gen.CurrentMethodDef, ret, withType, _after, _before);
                 case EArray(e, index): // array access
                 // if has an indexer decl, do indexer access
                 // e.g. .method public final hidebysig virtual newslot specialname instance !0/*T*/ get_Item
@@ -792,22 +803,22 @@ class GenPE extends Gen {
             next = post;
     }
 
-    function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>) {}
+    function handleBinop(op:String, arg1:Array<Expr>, arg2:Array<TType>)
+        throw new NotImplementedException();
 
     function handleCall(e:Expr, funcType:TType, params:Array<Expr>, paramTypes:Array<TType>, retType:TType) {
-        
         // so first we had to set up a hell of a lot of state
 
         var methodName = '';
         var callerType = types.checker.check(e);
         var callerClrType = switch e.expr() {
-            case EField(e, f):
+            case EField(e, f): // method call
                 methodName = f;
                 toClrTypeRef(callerType);
-            case EIdent(v):
+            case EIdent(v): // closure
                 methodName = v;
                 closure.clrTypeRef;
-            case EFunction(k, f):
+            case EFunction(k, f): // IIFE
                 methodName = addToClosure(k, f);
                 closure.clrTypeRef;
             default: throw 'assert';
@@ -820,7 +831,6 @@ class GenPE extends Gen {
             default: throw 'assert';
         }
 
-        
         var genericParamMap:Map<Int, BaseTypeRef> = [];
         for (i in 0...funcArgs.length) {
             var funcArg = funcArgs[i];
@@ -843,7 +853,7 @@ class GenPE extends Gen {
                         }
                     default:
                 }
-            } else { //if they don't unify...
+            } else { // if they don't unify...
                 if (!funcArg.opt)
                     throw 'parameter type mismatch in call expression (have: ${paramType.typeStr()}, want: ${funcArg.t.typeStr()} )';
                 else { // and its not optional
@@ -873,11 +883,7 @@ class GenPE extends Gen {
                 genericArguments.Add(genericParamMap[i]);
             }
 
-        var callConv = if (isInstanceMethod)
-            CallConv.Instance
-        else
-            CallConv.Default;
-
+        var callConv = if (isInstanceMethod) CallConv.Instance else CallConv.Default;
 
         var retClrType = toClrTypeRef(retType);
 
@@ -924,7 +930,45 @@ class GenPE extends Gen {
             cb();
     }
 
-    function defineClosure(closure:Closure) {}
+    function defineClosure() {
+        if(closure == null) return;
+        gen.BeginTypeDef(TypeAttr.Private, closure.name, null, null, new Location(0,0), null);
+        for(name => type in closure.locals) {
+            var attr = FieldAttr.Public;
+            var fieldDef = new FieldDef(attr, name, type);
+            gen.CurrentTypeDef.AddFieldDef(fieldDef);
+        }
+
+        for(name => decl in closure.methods) {
+            var flags:Int = cast MethAttr.Public;
+            flags |= cast MethAttr.HideBySig;
+            if (isSpecialName(name))
+                flags |= cast MethAttr.RTSpecialName;
+
+            var conv= peapi.CallConv.Instance;
+            if (name == 'new') {
+                flags |= cast MethAttr.SpecialName;
+                flags |= cast MethAttr.RTSpecialName;
+            }
+
+            var implAttr = ImplAttr.IL;
+            var retType = types.checker.makeType(decl.ret);
+            var retClrType = toClrTypeRef(retType);
+            var paramList ={
+                var ret = new ArrayList();
+                for(arg in decl.args) ret.Add(toClrTypeRef(types.checker.makeType(arg.t))); 
+                ret;
+            };
+            var startLocation = new Location(0,0);
+            var genParams = getGenericParameters(decl);
+            var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
+            method.SetMaxStack(8); 
+            mapToClrMethodBody(decl.expr, method, retType);
+
+        }
+
+        
+    }
 
     function setVar(varName:String, type:BaseTypeRef, location:Location, ?pos:haxe.PosInfos) {
         trace(pos);
@@ -937,7 +981,13 @@ class GenPE extends Gen {
     }
 
     function mkClosure():Closure {
-        throw new haxe.exceptions.NotImplementedException();
+        var name = '$$${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_HxClosure';
+        return {
+            name: name,
+            methods: [],
+            locals: [],
+            clrTypeRef: gen.GetTypeRef(name)
+        };
     }
 
     function isLocal(v:String):Bool
@@ -1028,7 +1078,8 @@ class GenPE extends Gen {
         return if (asm != null) gen.ExternTable.GetTypeRef(asm, arg0, valueType); else gen.GetTypeRef(arg0);
     }
 
-    function init() {}
+    function init()
+        throw new NotImplementedException();
 
     function getClosureLocal():String {
         throw new haxe.exceptions.NotImplementedException();
@@ -1083,25 +1134,36 @@ class GenPE extends Gen {
     }
 
     function getAnonClosureName():String {
-        throw new haxe.exceptions.NotImplementedException();
+        if (closure == null)
+            return null;
+        else
+            return '$$anon_${closure.methods.list().length}';
     }
 
     function addToClosure(kind:FunctionKind, decl:FunctionDecl) {
         if (closure == null) {
             closure = mkClosure();
-            closure.name = '${COMPILER_GENERATED_PREFIX}${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_hx_ClosureState';
         }
         var name:String = switch kind {
             case FAnonymous | FArrow: getAnonClosureName();
             case FNamed(name, inlined): // do something about inlining
                 name;
         }
-        closure.methods.push({
-            name: name,
-            f: decl
-        });
+        closure.methods.set(name, decl);
         return name;
     }
+
+	function getGenericParameters(f:FunctionDecl) {
+		var ret = new GenericParameters();
+        for(param in f.params) {
+            var constraints = new ArrayList();
+            for(constraint in param.constraints) constraints.Add(toClrTypeRef(types.checker.makeType(constraint)));
+            var param = new GenericParameter(param.name, GenericParamAttributes.Covariant, constraints);
+            
+            ret.Add(param);
+        }
+        return ret;
+	}
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
@@ -1132,10 +1194,10 @@ enum abstract LabelRefs(String) from String to String {
     var END_TRY = "END_TRY_";
 }
 
-interface Closure {
+typedef Closure = {
     var name:String;
     var locals:Map<String, BaseTypeRef>;
-    var methods:Array<{name:String, f:FunctionDecl}>;
+    var methods:Map<String,FunctionDecl>;
 
     var clrTypeRef:BaseTypeRef;
 }
