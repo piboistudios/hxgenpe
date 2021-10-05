@@ -103,7 +103,8 @@ class GenPE extends Gen {
     var constructorFields:Array<{field:FieldDef, decl:VarDecl}> = [];
     // I guess we shouldn't force dependencies... but for now, this will rely on System.Linq.Expressions.dll
     var useSystemDynamicTypes = true;
-    var firstPassComplete = false;
+    var findLocalsComplete = false;
+    var lastExprWasRet = false;
     var evaluatedStaticSets:Map<String, Map<String, Dynamic>> = [];
     var deferred:{
         firstWave:Deferred,
@@ -136,7 +137,7 @@ class GenPE extends Gen {
         gen.CurrentCustomAttrTarget = gen.ThisAssembly;
         gen.CurrentDeclSecurityTarget = gen.ThisAssembly;
         init();
-        firstPass(types);
+        findLocals(types);
         secondPass(types);
         finalPass(types);
         gen.EndSourceFile();
@@ -145,10 +146,10 @@ class GenPE extends Gen {
     }
 
     // add types to checker
-    function firstPass(decls:Array<hscript.Expr.ModuleDecl>) {
+    function findLocals(decls:Array<hscript.Expr.ModuleDecl>) {
         for (decl in decls)
             types.addType(decl);
-        firstPassComplete = true;
+        findLocalsComplete = true;
     }
 
     // generate PE (or apparently not... just prep the codegen and set up deferred tasks)
@@ -214,7 +215,7 @@ class GenPE extends Gen {
         }
 
         var conv:Int = cast peapi.CallConv.Default;
-        
+
         if (!field.access.contains(AStatic)) {
             conv |= cast CallConv.Instance;
         }
@@ -244,10 +245,9 @@ class GenPE extends Gen {
         labelRefCount = [];
         locals = [];
         mapToClrMethodBody(f.expr, method, ret);
+        endMethod(ret, f.expr.location());
         generateLocals();
-        if (retType.FullName == "System.Void") {
-            noneInstr(peapi.Op.ret, f.expr.location());
-        }
+        
         if (closure != null)
             beforeNextType.push(() -> defineClosure());
         gen.EndMethodDef(f.expr.location());
@@ -318,7 +318,7 @@ class GenPE extends Gen {
     function toClrTypeRef(t:TType):BaseTypeRef {
         trace(t);
         return // this of course can only be called after the first pass
-            if (!firstPassComplete) throw 'First pass incomplete; cannot convert types'; else switch types.checker.follow(t) {
+            if (!findLocalsComplete) throw 'First pass incomplete; cannot convert types'; else switch types.checker.follow(t) {
                 case TMono({r: null}): Primitives.VOID;
                 case TVoid: Primitives.VOID;
                 case TInt: Primitives.INT;
@@ -388,7 +388,9 @@ class GenPE extends Gen {
     }
 
     // da meat
-    function mapToClrMethodBody(expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
+    function mapToClrMethodBody(?expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
+        if (expr == null)
+            return; // noop
         inline function doNext(?done)
             if (next != null) {
                 next();
@@ -420,18 +422,18 @@ class GenPE extends Gen {
 
         var with = if (withType != null) WithType(withType) else null;
         // make sure we move locals to closure as necessary, also define locals up front
-        function firstPass(e:Expr) {
+        function findLocals(e:Expr) {
             trace(e.expr());
             switch e.expr() {
                 case EIf(cond, e1, e2):
-                    firstPass(cond);
-                    firstPass(e1);
+                    findLocals(cond);
+                    findLocals(e1);
                     if (e2 != null)
-                        firstPass(e2);
+                        findLocals(e2);
 
                 case EBlock(e):
                     for (expr in e)
-                        firstPass(expr);
+                        findLocals(expr);
                 case EVar(n, t, e):
                     var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
                     declareLocal(n, type);
@@ -446,23 +448,25 @@ class GenPE extends Gen {
                     }
 
                     declareLocal(v, type);
-                    firstPass(e);
+                    findLocals(e);
                 case ETry(e, v, t, ecatch):
                     var catchType = types.checker.makeType(t, expr);
                     declareLocal(v, catchType);
-                    firstPass(e);
-                    firstPass(ecatch);
+                    findLocals(e);
+                    findLocals(ecatch);
                 case EFunction(_, {expr: e}):
+                    findLocals(e);
                     e.iter(e -> switch e.expr() {
                         case EIdent(v):
                             if (isLocal(v)) {
                                 moveToClosure(v);
                             }
-                        default:
+                        default: findLocals(e);
                     });
                 default:
             }
         }
+        lastExprWasRet = false;
         function doMap(e:Expr)
             switch e.expr() {
                 case EIdent('null'):
@@ -502,6 +506,7 @@ class GenPE extends Gen {
                 case EReturn(e):
                     mapToClrMethodBody(e, method, ret, withType, _after);
                     noneInstr(peapi.Op.ret, e.location());
+                    lastExprWasRet = true;
                 case EIdent(i):
                     trace(locals);
                     handleIdent(i, e.location());
@@ -627,7 +632,7 @@ class GenPE extends Gen {
                 default:
             }
         if (expr.expr().match(EBlock(_))) {
-            firstPass(expr);
+            findLocals(expr);
             setLocalSlots();
         }
         doMap(expr);
@@ -888,9 +893,10 @@ class GenPE extends Gen {
         // and finally... do the actual mapping to CLR body
 
         // If it's not static, put the instance on the stack
-        if (isInstanceMethod) {
+        var methodOp = if (isInstanceMethod) {
             mapToClrMethodBody(e, gen.CurrentMethodDef, null, callerType);
-        }
+            MethodOp.callvirt;
+        } else MethodOp.call;
         // put the parameters on the stack
         for (i in 0...params.length) {
             var param = params[i];
@@ -900,7 +906,8 @@ class GenPE extends Gen {
             params[i] = doConversion(param, paramType, argType);
             mapToClrMethodBody(params[i], gen.CurrentMethodDef, null, argType);
         }
-        methodInstr(MethodOp.call, methRef, e.location());
+        
+        methodInstr(methodOp, methRef, e.location());
     }
 
     // so, to reference a field in CLR, you need to know if
@@ -925,15 +932,16 @@ class GenPE extends Gen {
     }
 
     function defineClosure() {
-        if(closure == null) return;
-        gen.BeginTypeDef(TypeAttr.Private, closure.name, null, null, new Location(0,0), null);
-        for(name => type in closure.locals) {
+        if (closure == null)
+            return;
+        gen.BeginTypeDef(TypeAttr.Private, closure.name, null, null, new Location(0, 0), null);
+        for (name => type in closure.locals) {
             var attr = FieldAttr.Public;
             var fieldDef = new FieldDef(attr, name, type);
             gen.CurrentTypeDef.AddFieldDef(fieldDef);
         }
 
-        for(name => decl in closure.methods) {
+        for (name => decl in closure.methods) {
             var flags:Int = cast MethAttr.Public;
             flags |= cast MethAttr.HideBySig;
             if (isSpecialName(name)) {
@@ -941,26 +949,26 @@ class GenPE extends Gen {
                 flags |= cast MethAttr.RTSpecialName;
             }
 
-            var conv= peapi.CallConv.Instance;
-           
+            var conv = peapi.CallConv.Instance;
+
             var implAttr = ImplAttr.IL;
             var retType = types.checker.makeType(decl.ret);
             var retClrType = toClrTypeRef(retType);
-            var paramList ={
+            var paramList = {
                 var ret = new ArrayList();
-                for(arg in decl.args) ret.Add(toClrTypeRef(types.checker.makeType(arg.t))); 
+                for (arg in decl.args)
+                    ret.Add(toClrTypeRef(types.checker.makeType(arg.t)));
                 ret;
             };
-            var startLocation = new Location(0,0);
+            var startLocation = new Location(0, 0);
             var genParams = getGenericParameters(decl);
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
-            method.SetMaxStack(8); 
+            method.SetMaxStack(8);
             mapToClrMethodBody(decl.expr, method, retType);
-            gen.EndMethodDef(new Location(0,0));
+            endMethod(retType, decl.expr.location());
+            gen.EndMethodDef(new Location(0, 0));
         }
         gen.EndTypeDef();
-
-        
     }
 
     function setVar(varName:String, type:BaseTypeRef, location:Location, ?pos:haxe.PosInfos) {
@@ -1090,17 +1098,11 @@ class GenPE extends Gen {
         trace('declaring local $n');
         trace(type);
         types.checker.setGlobal(n, type);
-        if (closure == null) {
-            if (!locals.exists(n)) {
-                locals.set(n, toClrTypeRef(type));
-            } else if (throwOnDup)
-                throw 'duplicate local variable $n redefined as $type';
-        } else {
-            if (!closure.locals.exists(n))
-                closure.locals.set(n, toClrTypeRef(type));
-            else if (throwOnDup)
-                throw 'duplicate closure variable $n redefined as $type';
-        }
+
+        if (!locals.exists(n)) {
+            locals.set(n, toClrTypeRef(type));
+        } else if (throwOnDup)
+            throw 'duplicate local variable $n redefined as $type';
     }
 
     function generateLocals() {
@@ -1147,17 +1149,30 @@ class GenPE extends Gen {
         return name;
     }
 
-	function getGenericParameters(f:FunctionDecl) {
-		var ret = new GenericParameters();
-        for(param in f.params) {
+    function getGenericParameters(f:FunctionDecl) {
+        var ret = new GenericParameters();
+        for (param in f.params) {
             var constraints = new ArrayList();
-            for(constraint in param.constraints) constraints.Add(toClrTypeRef(types.checker.makeType(constraint)));
+            for (constraint in param.constraints)
+                constraints.Add(toClrTypeRef(types.checker.makeType(constraint)));
             var param = new GenericParameter(param.name, GenericParamAttributes.Covariant, constraints);
-            
+
             ret.Add(param);
         }
         return ret;
-	}
+    }
+
+	/**
+	 * handle void returns.
+	 */
+	function endMethod(ret:TType, location:Location) {
+        if (!lastExprWasRet)
+            if (ret == TVoid) {
+                noneInstr(peapi.Op.ret, location);
+            } else {
+                throw 'Missing return of type ${ret.typeStr()}';
+            }
+    }
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
@@ -1191,7 +1206,7 @@ enum abstract LabelRefs(String) from String to String {
 typedef Closure = {
     var name:String;
     var locals:Map<String, BaseTypeRef>;
-    var methods:Map<String,FunctionDecl>;
+    var methods:Map<String, FunctionDecl>;
 
     var clrTypeRef:BaseTypeRef;
 }
