@@ -244,7 +244,7 @@ class GenPE extends Gen {
         // BUT by default .NET allows unverifiable PEs so.... is it worth the bother? Not right now
         labelRefCount = [];
         locals = [];
-        mapToClrMethodBody(f.expr, method, ret);
+        mapToClrMethodBody(f.expr, method);
         endMethod(ret, f.expr.location());
         generateLocals();
         
@@ -388,7 +388,7 @@ class GenPE extends Gen {
     }
 
     // da meat
-    function mapToClrMethodBody(?expr:hscript.Expr, method:MethodDef, ret:TType, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
+    function mapToClrMethodBody(?expr:hscript.Expr, method:MethodDef, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
         if (expr == null)
             return; // noop
         inline function doNext(?done)
@@ -405,16 +405,16 @@ class GenPE extends Gen {
                 _before();
         inline function doIf(e:Expr, cond:Expr, e1:Expr, e2:Null<Expr>) {
             // var branchEnd:LabelInfo = null;
-            mapToClrMethodBody(cond, method, ret, withType);
+            mapToClrMethodBody(cond,  method,  withType);
             brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_COND), cond.location());
             doNext();
-            mapToClrMethodBody(e1, method, ret, withType);
+            mapToClrMethodBody(e1,  method, withType);
             after();
             brTargetIdInstr(BranchOp.br_s, referenceLabel(LabelRefs.END_IF), e1.location());
             noneInstr(peapi.Op.nop, e1.location());
             var endOfConditionLabel = placeLabelRef(LabelRefs.END_COND);
             if (e2 != null) {
-                mapToClrMethodBody(e2, method, ret, withType, _after);
+                mapToClrMethodBody(e2,  method, withType, _after);
             }
             noneInstr(peapi.Op.nop, e.location());
             var endIfLabel = placeLabelRef(LabelRefs.END_IF);
@@ -469,6 +469,9 @@ class GenPE extends Gen {
         lastExprWasRet = false;
         function doMap(e:Expr)
             switch e.expr() {
+                case EField(e, f):
+                    handleField(e, f);
+                    after();
                 case EIdent('null'):
                     noneInstr(peapi.Op.ldnull, e.location());
                     after();
@@ -492,19 +495,19 @@ class GenPE extends Gen {
                     // technically after should be null at this point.. not sure if should throw
                     types.checker.allowGlobalsDefine = true;
                     var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
-                    mapToClrMethodBody(e, method, ret, type, () -> setVar(n, toClrTypeRef(types.checker.makeType(t, expr)), e.location()));
+                    mapToClrMethodBody(e,  method, type, () -> setVar(n, toClrTypeRef(types.checker.makeType(t, expr)), e.location()));
                     doNext();
                 case EBlock(e):
                     var from = gen.CurrentMethodDef.AddLabel();
                     gen.CurrentMethodDef.BeginLocalsScope();
                     before();
                     for (expr in e)
-                        mapToClrMethodBody(expr, method, ret, withType);
+                        mapToClrMethodBody(expr,  method, withType);
                     after();
                     handlerBlock = new HandlerBlock(from, gen.CurrentMethodDef.AddLabel());
                     gen.CurrentMethodDef.EndLocalsScope();
                 case EReturn(e):
-                    mapToClrMethodBody(e, method, ret, withType, _after);
+                    mapToClrMethodBody(e,  method, withType, _after);
                     noneInstr(peapi.Op.ret, e.location());
                     lastExprWasRet = true;
                 case EIdent(i):
@@ -529,9 +532,9 @@ class GenPE extends Gen {
                     doIf(e, cond, e1, e2);
                 case EWhile(cond, e):
                     var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
-                    mapToClrMethodBody(cond, method, ret, withType);
+                    mapToClrMethodBody(cond,  method, withType);
                     brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
-                    mapToClrMethodBody(e, method, ret, withType);
+                    mapToClrMethodBody(e,  method, withType);
                     brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
                     noneInstr(peapi.Op.nop, e.location());
                     placeLabelRef(LabelRefs.END_LOOP);
@@ -551,7 +554,7 @@ class GenPE extends Gen {
                             doNext();
                             handleIdent(loopVar, e.location());
                             brTargetIdInstr(BranchOp.beq, referenceLabel(LabelRefs.END_LOOP), it.location());
-                            mapToClrMethodBody(e, method, ret, withType);
+                            mapToClrMethodBody(e,  method, withType);
                             noneInstr(peapi.Op.ldc_i4_1, e.location());
                             handleIdent(loopVar, e.location());
                             noneInstr(peapi.Op.add, e.location());
@@ -566,7 +569,7 @@ class GenPE extends Gen {
                     var closureMethod = addToClosure(kind, decl);
                     var fieldExpr = EField(EIdent(getClosureLocal()).mk(e), closureMethod).mk(e);
                     // <closureLocal>.<closureMethod>;
-                    mapToClrMethodBody(fieldExpr, gen.CurrentMethodDef, ret, withType, _after, _before);
+                    mapToClrMethodBody(fieldExpr,  gen.CurrentMethodDef, withType, _after, _before);
                 case EArray(e, index): // array access
                 // if has an indexer decl, do indexer access
                 // e.g. .method public final hidebysig virtual newslot specialname instance !0/*T*/ get_Item
@@ -582,7 +585,7 @@ class GenPE extends Gen {
                 // otherwise bang head on keyboard
                 case EThrow(e):
                     var exception:Expr = convertToException(e);
-                    mapToClrMethodBody(exception, method, ret);
+                    mapToClrMethodBody(exception,  method);
                     noneInstr(peapi.Op.throwOp, e.location());
                 case ETry(e, v, t, ecatch): // TODO: hscript: catch should be an array....
                     // similar semantics as try/catch in c#
@@ -593,10 +596,10 @@ class GenPE extends Gen {
                         ecatch.e = EBlock([e]);
                     }
                     var catchType = toClrTypeRef(types.checker.makeType(t, expr));
-                    mapToClrMethodBody(e, method, ret, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
+                    mapToClrMethodBody(e,  method, withType, () -> brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
 
                     var tryBlock = new TryBlock(handlerBlock, e.location());
-                    mapToClrMethodBody(ecatch, method, ret, withType, _after, () -> setVar(v, catchType, ecatch.location()));
+                    mapToClrMethodBody(ecatch,  method, withType, _after, () -> setVar(v, catchType, ecatch.location()));
                     brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location());
                     var cb = new CatchBlock(catchType);
                     cb.SetHandlerBlock(handlerBlock);
@@ -618,17 +621,17 @@ class GenPE extends Gen {
                 // for anons/typedefs, the subject of the switch needs to be converted to
                 case EDoWhile(cond, e):
                     var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
-                    mapToClrMethodBody(e, method, ret, withType);
-                    mapToClrMethodBody(cond, method, ret, withType);
+                    mapToClrMethodBody(e,  method, withType);
+                    mapToClrMethodBody(cond,  method, withType);
                     brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
                     brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
                     noneInstr(peapi.Op.nop, e.location());
                     placeLabelRef(LabelRefs.END_LOOP);
                 case EMeta(name, args, e):
                     meta = {name: name, args: args, expr: e};
-                    mapToClrMethodBody(e, method, ret, withType, _after);
+                    mapToClrMethodBody(e,  method, withType, _after);
                 case ECheckType(e, t): // or not
-                    mapToClrMethodBody(e, method, ret, types.checker.makeType(t, expr), _after);
+                    mapToClrMethodBody(e,  method, types.checker.makeType(t, expr), _after);
                 default:
             }
         if (expr.expr().match(EBlock(_))) {
@@ -750,11 +753,11 @@ class GenPE extends Gen {
             case '--' | '++':
                 handleIncOrDec(op, prefix, e, type);
             case '!' if (prefix):
-                mapToClrMethodBody(e, gen.CurrentMethodDef, null);
+                mapToClrMethodBody(e,  gen.CurrentMethodDef);
                 noneInstr(peapi.Op.ldc_i4_0, e.location());
                 noneInstr(peapi.Op.ceq, e.location());
             case '~' if (prefix):
-                mapToClrMethodBody(e, gen.CurrentMethodDef, null);
+                mapToClrMethodBody(e,  gen.CurrentMethodDef);
                 noneInstr(peapi.Op.not, e.location());
             default:
                 throw 'invalid unary operator: $op (near ${printer.exprToString(e)})';
@@ -894,7 +897,7 @@ class GenPE extends Gen {
 
         // If it's not static, put the instance on the stack
         var methodOp = if (isInstanceMethod) {
-            mapToClrMethodBody(e, gen.CurrentMethodDef, null, callerType);
+            mapToClrMethodBody(e,  gen.CurrentMethodDef, callerType);
             MethodOp.callvirt;
         } else MethodOp.call;
         // put the parameters on the stack
@@ -904,7 +907,7 @@ class GenPE extends Gen {
             var arg = funcArgs[i];
             var argType = arg.t;
             params[i] = doConversion(param, paramType, argType);
-            mapToClrMethodBody(params[i], gen.CurrentMethodDef, null, argType);
+            mapToClrMethodBody(params[i],  gen.CurrentMethodDef, argType);
         }
         
         methodInstr(methodOp, methRef, e.location());
@@ -915,15 +918,18 @@ class GenPE extends Gen {
     // accessing locals and fields)
     // also, any locals that get captured/referenced inside a closure have to be
     // moved into the closure as member fields.
-    function handleIdent(e:String, location:Location) {
-        if (locals.exists(e)) {
-            localIdInstr(IntOp.ldloc_s, e, location);
-        } else if (closure != null && closure.locals.exists(e)) {
+    function handleIdent(id:String, location:Location) {
+        if (locals.exists(id)) {
+            localIdInstr(IntOp.ldloc_s, id, location);
+        } else if (closure != null && closure.locals.exists(id)) {
             localIdInstr(IntOp.ldloc_s, getClosureLocal(), location);
-            var owner = gen.GetTypeRef(closure.name);
-            var type = toClrTypeRef(types.checker.check(EIdent(e).mk(null)));
-            fieldInstr(FieldOp.ldfld, type, owner, e, location);
+            handleField(closure.local, id);
         }
+    }
+
+    var isRhsOfAssignment = false;
+    function handleField(e:Expr, f:String) {
+        
     }
 
     function afterType() {
@@ -964,7 +970,7 @@ class GenPE extends Gen {
             var genParams = getGenericParameters(decl);
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
             method.SetMaxStack(8);
-            mapToClrMethodBody(decl.expr, method, retType);
+            mapToClrMethodBody(decl.expr, method);
             endMethod(retType, decl.expr.location());
             gen.EndMethodDef(new Location(0, 0));
         }
@@ -983,11 +989,17 @@ class GenPE extends Gen {
 
     function mkClosure():Closure {
         var name = '$$${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_HxClosure';
+        var localName = '$$closure';
+        declareLocal(localName, TUnresolved(name));
+        var newExpr = ENew(name, []).mk(null);
+        var varDecl = EVar(localName, CTPath([name]), newExpr).mk(null);
+        mapToClrMethodBody(varDecl,  gen.CurrentMethodDef);
         return {
             name: name,
             methods: [],
             locals: [],
-            clrTypeRef: gen.GetTypeRef(name)
+            clrTypeRef: gen.GetTypeRef(name),
+            local: EIdent(localName).mk(null)
         };
     }
 
@@ -1173,6 +1185,8 @@ class GenPE extends Gen {
                 throw 'Missing return of type ${ret.typeStr()}';
             }
     }
+
+	
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};
@@ -1209,4 +1223,5 @@ typedef Closure = {
     var methods:Map<String, FunctionDecl>;
 
     var clrTypeRef:BaseTypeRef;
+    var local:Expr;
 }
