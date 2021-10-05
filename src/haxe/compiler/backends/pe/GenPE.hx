@@ -105,6 +105,7 @@ class GenPE extends Gen {
     var useSystemDynamicTypes = true;
     var findLocalsComplete = false;
     var lastExprWasRet = false;
+    
     var evaluatedStaticSets:Map<String, Map<String, Dynamic>> = [];
     var deferred:{
         firstWave:Deferred,
@@ -247,7 +248,7 @@ class GenPE extends Gen {
         mapToClrMethodBody(f.expr);
         endMethod(ret, f.expr.location());
         generateLocals();
-        
+
         if (closure != null)
             beforeNextType.push(() -> defineClosure());
         gen.EndMethodDef(f.expr.location());
@@ -391,7 +392,7 @@ class GenPE extends Gen {
     function mapToClrMethodBody(?expr:hscript.Expr, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
         if (expr == null)
             return; // noop
-        
+
         inline function doNext(?done)
             if (next != null) {
                 next();
@@ -406,7 +407,7 @@ class GenPE extends Gen {
                 _before();
         inline function doIf(e:Expr, cond:Expr, e1:Expr, e2:Null<Expr>) {
             // var branchEnd:LabelInfo = null;
-            mapToClrMethodBody(cond,  withType);
+            mapToClrMethodBody(cond, withType);
             brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_COND), cond.location());
             doNext();
             mapToClrMethodBody(e1, withType);
@@ -523,7 +524,7 @@ class GenPE extends Gen {
                 case EBinop(op, e1, e2):
                     var type1 = types.checker.check(e1, with);
                     var type2 = types.checker.check(e2, WithType(type1));
-                    if(e2.expr().match(EField(_, _))) {
+                    if (e2.expr().match(EField(_, _))) {
                         isRhsOfOp = true;
                         lhsType = type2;
                     }
@@ -611,7 +612,7 @@ class GenPE extends Gen {
                     var cb = new CatchBlock(catchType);
                     cb.SetHandlerBlock(handlerBlock);
                     tryBlock.AddSehClause(cb);
-                    gen.CurrentMethodDef.AddInstr(tryBlock);
+                    putInstr(tryBlock);
                     placeLabelRef(LabelRefs.END_TRY);
                 case EObject(fl): // handle this very last...
                 // basically have to create:
@@ -655,16 +656,16 @@ class GenPE extends Gen {
 
     // begin shameless ripping from ILParser.jay
     inline function noneInstr(opcode:peapi.Op, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new SimpInstr(opcode, loc));
+        putInstr(new SimpInstr(opcode, loc));
 
     inline function localIntInstr(opcode:IntOp, int:Int, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, int, loc));
+        putInstr(new IntInstr(opcode, int, loc));
 
     inline function localIdInstr(opcode:IntOp, id:String, loc:Location) {
         var slot = localSlots[id];
         if (slot < 0)
             throw 'Undeclared identifier $id';
-        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, slot, loc));
+        putInstr(new IntInstr(opcode, slot, loc));
     }
 
     inline function paramInt32Instr(opcode:IntOp, int:Int, loc:Location)
@@ -674,7 +675,7 @@ class GenPE extends Gen {
         var pos = gen.CurrentMethodDef.GetNamedParamPos(id);
         if (pos < 0)
             throw 'Undeclared identifier $id';
-        gen.CurrentMethodDef.AddInstr(new IntInstr(opcode, pos, loc));
+        putInstr(new IntInstr(opcode, pos, loc));
     }
 
     inline function intInt32Instr(opcode:IntOp, int:Int, loc:Location)
@@ -686,29 +687,32 @@ class GenPE extends Gen {
     inline function r8Int64Instr(instr:MiscInstr, long:Int64, loc:Location)
         switch instr {
             case MiscInstr.ldc_i8:
-                gen.CurrentMethodDef.AddInstr(new LdcInstr(instr, long, loc));
+                putInstr(new LdcInstr(instr, long, loc));
             default:
         }
 
     inline function r8Float64Instr(instr:MiscInstr, double:Float, loc:Location)
         switch instr {
             case MiscInstr.ldc_r4 | MiscInstr.ldc_r8:
-                gen.CurrentMethodDef.AddInstr(new LdcInstr(instr, double, loc));
+                putInstr(new LdcInstr(instr, double, loc));
             default:
         }
 
     inline function brTargetInt32Instr(branchOp:BranchOp, int:Int, loc:Location) {
         var target = gen.CurrentMethodDef.AddLabel(int);
-        gen.CurrentMethodDef.AddInstr(new BranchInstr(branchOp, target, loc));
+        putInstr(new BranchInstr(branchOp, target, loc));
     }
 
     inline function brTargetIdInstr(branchOp:BranchOp, id:String, loc:Location) {
         var target = gen.CurrentMethodDef.AddLabelRef(id);
-        gen.CurrentMethodDef.AddInstr(new BranchInstr(branchOp, target, loc));
+        putInstr(new BranchInstr(branchOp, target, loc));
     }
 
+    inline function putInstr(instr:mono.ilasm.IInstr)
+        gen.CurrentMethodDef.AddInstr(instr);
+
     inline function methodInstr(methodOp:MethodOp, methRef:BaseMethodRef, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new MethodInstr(methodOp, methRef, loc));
+        putInstr(new MethodInstr(methodOp, methRef, loc));
 
     inline function fieldInstr(fieldOp:FieldOp, type:BaseTypeRef, owner:BaseTypeRef, name:String, loc:Location) {
         // not sure if this is right
@@ -716,26 +720,26 @@ class GenPE extends Gen {
         if (gpr != null && gen.CurrentMethodDef != null)
             gen.CurrentMethodDef.ResolveGenParam(cast gpr.PeapiType);
         var fieldref = owner.GetFieldRef(type, name);
-        gen.CurrentMethodDef.AddInstr(new FieldInstr(fieldOp, fieldref, loc));
+        putInstr(new FieldInstr(fieldOp, fieldref, loc));
     }
 
     inline function basicFieldInstr(fieldOp:FieldOp, type:BaseTypeRef, name:String, loc:Location) {
         var fieldRef = gen.GetGlobalFieldRef(type, name);
-        gen.CurrentMethodDef.AddInstr(new FieldInstr(fieldOp, fieldRef, loc));
+        putInstr(new FieldInstr(fieldOp, fieldRef, loc));
     }
 
     inline function typeInstr(typeOp:TypeOp, type:BaseTypeRef, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new TypeInstr(typeOp, type, loc));
+        putInstr(new TypeInstr(typeOp, type, loc));
 
     inline function loadStringInstr(string:String, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new LdstrInstr(string, loc));
+        putInstr(new LdstrInstr(string, loc));
 
     inline function callInstr(callingConvention:CallConv, methodRef:BaseMethodRef, loc:Location) {
-        gen.CurrentMethodDef.AddInstr(new MethodInstr(MethodOp.call, methodRef, loc));
+        putInstr(new MethodInstr(MethodOp.call, methodRef, loc));
     }
 
     inline function tokenInstr(instr:MiscInstr, tokenType:Either<IFieldRef, Either<BaseMethodRef, BaseTypeRef>>, loc:Location)
-        gen.CurrentMethodDef.AddInstr(switch tokenType {
+        putInstr(switch tokenType {
             case Left(v):
                 new LdtokenInstr(v, loc);
             case Right(v):
@@ -748,7 +752,7 @@ class GenPE extends Gen {
         });
 
     inline function switchInstr(labels:Array<LabelInfo>, loc:Location)
-        gen.CurrentMethodDef.AddInstr(new SwitchInstr({
+        putInstr(new SwitchInstr({
             var list = new ArrayList();
             for (label in labels)
                 list.Add(label);
@@ -819,16 +823,25 @@ class GenPE extends Gen {
         // so first we had to set up a hell of a lot of state
 
         var methodName = '';
-        var callerType = types.checker.check(e);
+        var callerType = types.checker.follow(types.checker.check(e));
+        var ftnPtr = false;
         var callerClrType = switch e.expr() {
             case EField(e, f): // method call
                 methodName = f;
                 mapToClrMethodBody(e, callerType);
                 toClrTypeRef(callerType);
             case EIdent(v): // closure
+                // I think this will make delegates callable...
+                //  https://github.com/HaxeFoundation/haxe/blob/6eb36b2aa38591203005ea30f8334e41de292111/src/codegen/dotnet.ml#L1196
+                if (peTypes.delegateTypes.exists(type -> types.checker.tryUnify(callerType, type))) {
+                    handleCall(EField(e, 'Invoke').mk(null), funcType, params, paramTypes, retType);
+                    return;
+                }
+                ftnPtr = true;
                 methodName = v;
                 closure.clrTypeRef;
             case EFunction(k, f): // IIFE
+                ftnPtr = true;
                 methodName = addToClosure(k, f);
                 closure.clrTypeRef;
             default: throw 'assert';
@@ -873,9 +886,7 @@ class GenPE extends Gen {
             }
         }
 
-        
         var genericParamCount = getGenericParamCount(funcArgs);
-        
 
         // yes... all of that just to set up state for generic parameters (and also handle optional params)
         var genericArguments = if (genericParamCount != 0) new GenericArguments() else null;
@@ -887,14 +898,14 @@ class GenPE extends Gen {
         var callConv = if (isInstanceMethod) CallConv.Instance else CallConv.Default;
 
         var retClrType = toClrTypeRef(retType);
-
-        var methRef = callerClrType.GetMethodRef(retClrType, callConv, methodName,
-            cs.Lib.nativeArray([for (funcArg in funcArgs) toClrTypeRef(funcArg.t)], true), genericParamCount);
+        var clrParamTypes = cs.Lib.nativeArray([for (funcArg in funcArgs) toClrTypeRef(funcArg.t)], true);
+        var methRef = callerClrType.GetMethodRef(retClrType, callConv, methodName, clrParamTypes, genericParamCount);
         if (genericArguments != null)
             methRef.GetGenericMethodRef(genericArguments);
         // and finally... do the actual mapping to CLR body
 
         // If it's not static, put the instance on the stack
+
         var methodOp = if (isInstanceMethod) {
             MethodOp.callvirt;
         } else MethodOp.call;
@@ -907,8 +918,11 @@ class GenPE extends Gen {
             params[i] = doConversion(param, paramType, argType);
             mapToClrMethodBody(params[i], argType);
         }
-        
-        methodInstr(methodOp, methRef, e.location());
+
+        if (ftnPtr)
+            putInstr(new CalliInstr(callConv, retClrType, clrParamTypes, e.location()))
+        else
+            methodInstr(methodOp, methRef, e.location());
     }
 
     // so, to reference a field in CLR, you need to know if
@@ -927,29 +941,31 @@ class GenPE extends Gen {
 
     var isRhsOfOp = false;
     var lhsType:Null<TType>;
+
     function handleField(e:Expr, f:String) {
         mapToClrMethodBody(e);
-        
+
         var type = types.checker.check(e);
-        
+
         var clrType = toClrTypeRef(type);
         var ret:TType = null;
-        var args = if(isRhsOfOp) switch lhsType {
+        var args = if (isRhsOfOp) switch lhsType {
             case TFun(args, r):
                 ret = r;
                 args;
             default: null;
         } else null;
-        var argTypes= [for(arg in args) arg.t];
+
+        var argTypes = [for (arg in args) arg.t];
         var fieldType = toClrTypeRef(types.checker.getField(type, f, e, isRhsOfOp, argTypes, ret));
-        if(isRhsOfOp && args != null && ret != null){ // assigning to method pointer..
-            
+        if (isRhsOfOp && args != null && ret != null) { // assigning to method pointer..
+
             var isInstanceField = types.checker.isFieldStatic(type, f, argTypes, ret);
-            var methodRef = clrType.GetMethodRef(toClrTypeRef(ret), if(isInstanceField) CallConv.Instance else CallConv.Default, f, cs.Lib.nativeArray([for(argType in argTypes) toClrTypeRef(argType)], true), getGenericParamCount(args));
+            var methodRef = clrType.GetMethodRef(toClrTypeRef(ret), if (isInstanceField) CallConv.Instance else CallConv.Default, f,
+                cs.Lib.nativeArray([for (argType in argTypes) toClrTypeRef(argType)], true), getGenericParamCount(args));
             methodInstr(MethodOp.ldftn, methodRef, e.location());
-        }
-        else {
-            var fieldOp = if(isRhsOfOp) FieldOp.stsfld else FieldOp.ldfld;
+        } else {
+            var fieldOp = if (isRhsOfOp) FieldOp.stsfld else FieldOp.ldfld;
             fieldInstr(fieldOp, fieldType, clrType, f, e.location());
         }
         isRhsOfOp = false;
@@ -1163,6 +1179,7 @@ class GenPE extends Gen {
             peTypes.loadAssembly(asm);
             gen.EndAssemblyRef();
         }
+        
     }
 
     function getAnonClosureName():String {
@@ -1198,10 +1215,10 @@ class GenPE extends Gen {
         return ret;
     }
 
-	/**
-	 * handle void returns.
-	 */
-	function endMethod(ret:TType, location:Location) {
+    /**
+     * handle void returns.
+     */
+    function endMethod(ret:TType, location:Location) {
         if (!lastExprWasRet)
             if (ret == TVoid) {
                 noneInstr(peapi.Op.ret, location);
@@ -1210,12 +1227,10 @@ class GenPE extends Gen {
             }
     }
 
-	
-
-	function getGenericParamCount(funcArgs:Array<{t:TType}>) {
+    function getGenericParamCount(funcArgs:Array<{t:TType}>) {
         var genericParamCount = 0;
         var genericParamNames:Map<Int, String> = [];
-		for (paramType in funcArgs) {
+        for (paramType in funcArgs) {
             switch paramType.t {
                 case TParam(param, i):
                     if (genericParamNames.exists(i)) {
@@ -1226,7 +1241,7 @@ class GenPE extends Gen {
             }
         }
         return genericParamCount;
-	}
+    }
 }
 
 typedef MethodDecl = {field:FieldDecl, decl:FunctionDecl};

@@ -16,10 +16,13 @@ using haxe.compiler.backends.pe.PECheckerTypes;
 
 class PECheckerTypes extends CheckerBase {
     var typeAssemblies:Map<String, String> = new Map();
+    public var delegateTypes:Array<TType>  = [];
+    var delegateTypeNames = ['Delegate', 'MulticastDelegate'];
     var currentPack = '';
 
     public function new() {
         t_string = TUnresolved("cs.system.String");
+        delegateTypes = delegateTypeNames.map(n -> TUnresolved('cs.system.$n'));
     }
 
     public override function setPack(pk) {
@@ -143,7 +146,7 @@ class PECheckerTypes extends CheckerBase {
             var isPrivate = type.IsNotPublic;
             if (type.IsClass) {
                 // trace(type.getName());
-                var cclass:ClassDecl = {
+                var decl:Dynamic = {
                     name: toHxTypeName(type.getName()).join('.'),
                     params: [for(typeParam in type.GenericTypeArguments) {
                         name: typeParam.Name
@@ -214,7 +217,10 @@ class PECheckerTypes extends CheckerBase {
                         ]),
                     extend: if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null
                 };
-                addType(DClass(cclass));
+                if(delegateTypeNames.indexOf(type.BaseType.Name) != 0) addType(DClass(decl));
+                else {
+                    
+                }
             } else if (type.IsEnum) {
                 var eenum:EnumDecl = {
                     params: [], // no GADTs  in CLR, thank god :)
