@@ -33,9 +33,10 @@ class Test {
     public static function main() {
         var t = "Hello, World!";
         var cond = true;
+        var func = function(t:String) {};
         try {
-            if(cond) for(i in 0...10) cs.system.Console.WriteLine(t, null);
-        } catch(e:System.Exception) {
+            if(cond) for(i in 0...10) func(t);
+        } catch(e:cs.system.Exception) {
             trace(e);
         }
     }

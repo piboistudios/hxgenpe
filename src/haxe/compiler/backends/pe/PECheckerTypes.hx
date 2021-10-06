@@ -32,7 +32,7 @@ class PECheckerTypes extends CheckerBase {
         var ret =  if(t.FullName == null) t.Name else t.FullName;
         return if(ret == null) "<Unknown>" else ret;
     }
-    public override function addType(decl:ModuleDecl) {
+    public override function declareType(decl:ModuleDecl) {
         // trace('Adding $decl');
         var name = currentPack;
         var type:CTypedecl = switch decl {
@@ -124,18 +124,22 @@ class PECheckerTypes extends CheckerBase {
         var asm = Assembly.LoadFrom('$asmName.dll');
         trace('loading $asm $asmName');
         // so.. I guess we need TypeInfo and not Type... just look at the implementation of Type.GetEnumValues vs. TypeInfo.GetEnumValues in mscorlib
-        var definedTypes = asm.DefinedTypes.GetEnumerator();
+        var definedTypesEnumerable:Dynamic = asm.DefinedTypes; // apparently hxcs can't handle these types. Whatever SMD
+        trace('getting enumerable');
+        var definedTypes:Dynamic = definedTypesEnumerable.GetEnumerator();
+        trace('got enumerator');
         var current = null;
-        var types:Iterable<cs.system.reflection.TypeInfo> = {
-            iterator: () -> {
-                next: () -> current,
-                hasNext: () -> {
-                    var ret = definedTypes.MoveNext();
-                    current = if(ret) definedTypes.Current else null;
-                    ret;
-                }
-            }
-        };
+        // var types:Iterable<cs.system.reflection.TypeInfo> = {
+        //     iterator: () -> {
+        //         next: () -> current,
+        //         hasNext: () -> {
+        //             var ret = definedTypes.MoveNext();
+        //             current = if(ret) definedTypes.Current else null;
+        //             ret;
+        //         }
+        //     }
+        // };
+        var types = [asm.GetType("System.String"), asm.GetType("System.Exception")].concat(delegateTypeNames.map(cast asm.GetType));
         var allTypes = [];
         var asmMeta = mkNetLibMeta(asmName);
         for (type in types) {
@@ -143,6 +147,7 @@ class PECheckerTypes extends CheckerBase {
                 // trace('Skipping ${type.Name}');
                 continue;
             }
+            trace(type.Name);
             var isPrivate = type.IsNotPublic;
             if (type.IsClass) {
                 // trace(type.getName());
@@ -217,7 +222,7 @@ class PECheckerTypes extends CheckerBase {
                         ]),
                     extend: if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null
                 };
-                if(delegateTypeNames.indexOf(type.BaseType.Name) != 0) addType(DClass(decl));
+                if(delegateTypeNames.indexOf(type.BaseType.Name) != 0) declareType(DClass(decl));
                 else {
                     
                 }
@@ -230,7 +235,7 @@ class PECheckerTypes extends CheckerBase {
                     isExtern: true,
                     fields: mkEnumFields(type)
                 };
-                addType(DEnum(eenum));
+                declareType(DEnum(eenum));
             } else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
             // if(decl != null) addType(decl);
         }

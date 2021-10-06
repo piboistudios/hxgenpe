@@ -8,10 +8,12 @@ class CheckerBase implements GenCheckerTypes {
     public var checker:Checker;
 
     var localParams:Map<String, TType>;
-    var previouslyUnresolved = [];
+    // var previouslyUnresolved = [];
 
     public function lookup(name:String) return decls[name];
     public function resolve(name:String, ?args:Array<TType>):TType {
+        trace('trying to resolve $name');
+        if(name == "String") return t_string;
         if (name == "Null") {
             if (args == null || args.length != 1)
                 throw "Missing Null<T> parameter";
@@ -20,7 +22,7 @@ class CheckerBase implements GenCheckerTypes {
         var t = types.get(name);
         if (t == null){ // TODO: Need to define types as they are encountered when parsing class libs...{
             // trace('unable to resolve $name');
-            previouslyUnresolved.push(name);
+            // previouslyUnresolved.push(name);
             return TUnresolved(name);
         } 
         if (args == null)
@@ -32,10 +34,10 @@ class CheckerBase implements GenCheckerTypes {
             case CTAbstract(a): TAbstract(a, args);
             case CTAlias(t): t;
         }
-        if(previouslyUnresolved.indexOf(name) != -1) {
-            @:privateAccess trace('resolved $name to ${Checker.typeStr(ret)}');
-            previouslyUnresolved.remove(name);
-        }
+        // if(previouslyUnresolved.indexOf(name) != -1) {
+        //     // @:privateAccess trace('resolved $name to ${Checker.typeStr(ret)}');
+        //     previouslyUnresolved.remove(name);
+        // }
         return ret;
     }
 
@@ -63,7 +65,8 @@ class CheckerBase implements GenCheckerTypes {
 
     public var t_string:TType;
 
-    public function addType(decl:ModuleDecl) throw new haxe.exceptions.NotImplementedException();
+    public function addType(name:String, type:CTypedecl) types.set(name, type);
+    public function declareType(decl:ModuleDecl) throw new haxe.exceptions.NotImplementedException();
 
     public function toTType(arg0:Null<CType>):TType throw new haxe.exceptions.NotImplementedException();
 

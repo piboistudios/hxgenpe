@@ -9,3 +9,5 @@ Test.*
 *.dll
 notes/**
 stdout
+dump/
+out
