@@ -1,5 +1,6 @@
 package haxe.compiler.backends.pe;
 
+import mono.ilasm.ParamDef;
 import mono.ilasm.PrimitiveTypeRef;
 import peapi.GenericParamConstraint;
 import peapi.GenericParamAttributes;
@@ -154,7 +155,7 @@ class GenPE extends Gen {
             types.declareType(decl);
         firstPassComplete = true;
     }
-
+    var currentTypeName:String;
     // generate PE (or apparently not... just prep the codegen and set up deferred tasks)
     function secondPass(types:Array<hscript.Expr.ModuleDecl>) {
         for (type in types)
@@ -165,7 +166,7 @@ class GenPE extends Gen {
                     gen.set_CurrentNameSpace(pack.toClrPath());
                 // case DImport(parts, everything):
                 case DClass(c):
-                    var name = currentPackage + '.${c.name}';
+                    var name =currentTypeName= currentPackage + '.${c.name}';
                     var flags = 0;
 
                     if (c.isPrivate)
@@ -235,11 +236,15 @@ class GenPE extends Gen {
         trace('ret type got');
         var ownerType = gen.CurrentTypeDef; // lookupType(owner).toClrTypeDef(this);
         var paramList = new cs.system.collections.ArrayList();
-        for (arg in f.args)
-            paramList.Add(if (arg.value == null) types.checker.makeType(arg.t,
-                arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value))));
+        for (arg in f.args) {
+            var argType = if (arg.value == null) types.checker.makeType(arg.t,
+                arg.value) else types.checker.check(arg.value, WithType(types.checker.makeType(arg.t, arg.value)));
+            var clrType = toClrTypeRef(argType);
+            var paramDef = new ParamDef(peapi.ParamAttr.Default, arg.name, clrType);
+            paramList.Add(paramDef);
+        }
         var genericParameters = getGenericParameters(f);
-
+        beforeMethod(f.expr, field.name);
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
 
         if (field.name == "main" && owner == mainClass)
@@ -251,11 +256,19 @@ class GenPE extends Gen {
         locals = [];
         mapToClrMethodBody(f.expr);
         endMethod(ret, f.expr.location());
+        closure = null;
         generateLocals();
 
-        if (closure != null)
-            beforeNextType.push(() -> defineClosure());
+        
         gen.EndMethodDef(f.expr.location());
+
+    }
+    function beforeMethod(body:Expr, methodName:String)  if (body.expr().match(EBlock(_))) {
+        upcomingMethodName = methodName;
+        findLocals(body);
+        setLocalSlots();
+        addClosureToChecker();
+        defineClosure();
     }
 
     function referenceLabel(refName) {
@@ -325,6 +338,7 @@ class GenPE extends Gen {
         return // this of course can only be called after the first pass
             if (!firstPassComplete) throw 'First pass incomplete; cannot convert types'; else switch types.checker.follow(t) {
                 case TUnresolved(name): 
+                    trace('type ref $name expected');
                     var ret = gen.GetTypeRef(name);
                     ret;
                 case TMono({r: null}): Primitives.VOID;
@@ -394,7 +408,53 @@ class GenPE extends Gen {
     function getDynamicTypeRef():BaseTypeRef {
         throw new NotImplementedException();
     }
+    function findLocals(e:Expr) {
+        // trace(e.expr());
+        switch e.expr() {
+            case EIf(cond, e1, e2):
+                findLocals(cond);
+                findLocals(e1);
+                if (e2 != null)
+                    findLocals(e2);
 
+            case EBlock(e):
+                for (expr in e)
+                    findLocals(expr);
+            case EVar(n, t, e):
+                var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, e)) else null);
+                declareLocal(n, type);
+                findLocals(e);
+            case EFor(v, it, e):
+                var type = switch types.checker.check(it) {
+                    case TAnon(f):
+                        switch f[0].t {
+                            case TFun(args, ret): ret;
+                            default: throw 'Invalid iterator type';
+                        }
+                    default: throw 'Invalid iterator type';
+                }
+
+                declareLocal(v, type);
+                findLocals(e);
+            case ETry(e, v, t, ecatch):
+                var catchType = types.checker.makeType(t, ecatch);
+                declareLocal(v, catchType);
+                findLocals(e);
+                findLocals(ecatch);
+            case EFunction(kind, decl):
+                addToClosure(kind, decl);
+                var e = decl.expr;
+                findLocals(e);
+                e.iter(e -> switch e.expr() {
+                    case EIdent(v):
+                        if (isLocal(v)) {
+                            moveToClosure(v);
+                        }
+                    default: findLocals(e);
+                });
+            default:
+        }
+    }
     // da meat
     function mapToClrMethodBody(?expr:hscript.Expr, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
         trace('mapping');
@@ -432,53 +492,7 @@ class GenPE extends Gen {
 
         var with = if (withType != null) WithType(withType) else null;
         // make sure we move locals to closure as necessary, also define locals up front
-        function findLocals(e:Expr) {
-            // trace(e.expr());
-            switch e.expr() {
-                case EIf(cond, e1, e2):
-                    findLocals(cond);
-                    findLocals(e1);
-                    if (e2 != null)
-                        findLocals(e2);
-
-                case EBlock(e):
-                    for (expr in e)
-                        findLocals(expr);
-                case EVar(n, t, e):
-                    var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
-                    declareLocal(n, type);
-                    findLocals(e);
-                case EFor(v, it, e):
-                    var type = switch types.checker.check(it) {
-                        case TAnon(f):
-                            switch f[0].t {
-                                case TFun(args, ret): ret;
-                                default: throw 'Invalid iterator type';
-                            }
-                        default: throw 'Invalid iterator type';
-                    }
-
-                    declareLocal(v, type);
-                    findLocals(e);
-                case ETry(e, v, t, ecatch):
-                    var catchType = types.checker.makeType(t, expr);
-                    declareLocal(v, catchType);
-                    findLocals(e);
-                    findLocals(ecatch);
-                case EFunction(kind, decl):
-                    addToClosure(kind, decl);
-                    var e = decl.expr;
-                    findLocals(e);
-                    e.iter(e -> switch e.expr() {
-                        case EIdent(v):
-                            if (isLocal(v)) {
-                                moveToClosure(v);
-                            }
-                        default: findLocals(e);
-                    });
-                default:
-            }
-        }
+        
         
         lastExprWasRet = false;
         function doMap(e:Expr)
@@ -547,6 +561,7 @@ class GenPE extends Gen {
                     isRhsOfOp = false;
                 case ECall(e, params):
                     var funcType = types.checker.check(e, with);
+                    trace(e);
                     // i think potentially withType below should be the ret from TFun above..
                     handleCall(e, funcType, params, [for (param in params) types.checker.check(param)], withType);
                     after();
@@ -590,6 +605,9 @@ class GenPE extends Gen {
                 case EFunction(_.getFunctionName() => closureMethod, decl):
                     var fieldExpr = EField(closure.local, closureMethod).mk(e);
                     // <closureLocal>.<closureMethod>;
+                    var newExpr = ENew(closure.name, []).mk(null);
+                    var varDecl = EVar(closure.localName, CTPath([closure.name]), newExpr).mk(null);
+                    mapToClrMethodBody(varDecl);
                     mapToClrMethodBody(fieldExpr, withType, _after, _before);
                 case EArray(e, index): // array access
                 // if has an indexer decl, do indexer access
@@ -655,11 +673,7 @@ class GenPE extends Gen {
                     mapToClrMethodBody(e, types.checker.makeType(t, expr), _after);
                 default:
             }
-        if (expr.expr().match(EBlock(_))) {
-            findLocals(expr);
-            setLocalSlots();
-            addClosureToChecker();
-        }
+        
         
         doMap(expr);
     }
@@ -850,24 +864,24 @@ class GenPE extends Gen {
                 // I think this will make delegates callable...
                 //  https://github.com/HaxeFoundation/haxe/blob/6eb36b2aa38591203005ea30f8334e41de292111/src/codegen/dotnet.ml#L1196
                 if (peTypes.delegateTypes.exists(type -> types.checker.tryUnify(callerType, type))) {
+                    trace('what ${printer.exprToString(e)} ${callerType.typeStr()} unifies with ${peTypes.delegateTypes.find(type -> types.checker.tryUnify(callerType, type)).typeStr()}');
                     handleCall(EField(e, 'Invoke').mk(null), funcType, params, paramTypes, retType);
                     return;
                 }
                 ftnPtr = true;
                 methodName = v;
-                closure.clrTypeRef;
+                closure.clrTypeRef();
             case EFunction(k, f): // IIFE
                 ftnPtr = true;
-                methodName = addToClosure(k, f);
-                closure.clrTypeRef;
-            default: throw 'assert';
+                closure.clrTypeRef();
+            default: throw 'invalid callerType: ${callerType.typeStr()}';
         }
         var isInstanceMethod = !types.checker.isFieldStatic(callerType, methodName, paramTypes, retType);
 
         var funcArgs = switch funcType {
             case TFun(args, ret):
                 args;
-            default: throw 'assert';
+            default: throw 'invalid funcType: ${funcType.typeStr()}';
         }
 
         var genericParamMap:Map<Int, BaseTypeRef> = [];
@@ -993,19 +1007,24 @@ class GenPE extends Gen {
     function afterType() {
         for (cb in beforeNextType)
             cb();
+        beforeNextType = [];
     }
 
     function defineClosure() {
+        trace('trying to define...');
         if (closure == null)
             return;
-        gen.BeginTypeDef(TypeAttr.Private, closure.name, null, null, new Location(0, 0), null);
+        
+        
         for (name => type in closure.locals) {
             var attr = FieldAttr.Public;
             var fieldDef = new FieldDef(attr, name, type);
             gen.CurrentTypeDef.AddFieldDef(fieldDef);
         }
-
+        trace('w0t');
         for (name => decl in closure.methods) {
+            trace('DECLARING: $name $decl');
+            trace(closure.methods.list().length);
             var flags:Int = cast MethAttr.Public;
             flags |= cast MethAttr.HideBySig;
             if (isSpecialName(name)) {
@@ -1021,17 +1040,19 @@ class GenPE extends Gen {
             var paramList = {
                 var ret = new ArrayList();
                 for (arg in decl.args)
-                    ret.Add(toClrTypeRef(types.checker.makeType(arg.t)));
+                    ret.Add(new ParamDef(peapi.ParamAttr.Default, arg.name, toClrTypeRef(types.checker.makeType(arg.t))));
                 ret;
             };
             var startLocation = new Location(0, 0);
             var genParams = getGenericParameters(decl);
+            beforeMethod(decl.expr, name);
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
             method.SetMaxStack(8);
             mapToClrMethodBody(decl.expr);
             endMethod(retType, decl.expr.location());
             gen.EndMethodDef(new Location(0, 0));
         }
+        trace('defined ${gen.CurrentTypeDef.FullName}');
         gen.EndTypeDef();
     }
 
@@ -1044,20 +1065,19 @@ class GenPE extends Gen {
             fieldInstr(FieldOp.stfld, type, gen.GetTypeRef(closure.name), varName, location);
         }
     }
-
+    var upcomingMethodName:String;    
     function mkClosure():Closure {
-        var name = '$$${gen.CurrentTypeDef.Name}_${gen.CurrentMethodDef.Name}_HxClosure';
+        var name = '${[currentTypeName].toClrPath()}/$$${gen.CurrentTypeDef.Name}_${upcomingMethodName}_HxClosure';
+        gen.BeginTypeDef(TypeAttr.NestedPrivate, name.split('/').pop(), null, null, new Location(0, 0), null);
         var localName = '$$closure';
         declareLocal(localName, types.resolve(name));
-        var newExpr = ENew(name, []).mk(null);
-        var varDecl = EVar(localName, CTPath([name]), newExpr).mk(null);
-        mapToClrMethodBody(varDecl);
+
         return {
             name: name,
             methods: [],
             locals: [],
             localTypes: [],
-            clrTypeRef: gen.GetTypeRef(name),
+            clrTypeRef: () -> gen.GetTypeRef(name),
             local: EIdent(localName).mk(null),
             localName: localName
         };
@@ -1190,7 +1210,9 @@ class GenPE extends Gen {
 
     // check if conversion is necessary, and if so, perform it
     function doConversion(param:Expr, paramType:TType, argType:TType):Expr {
-        throw new haxe.exceptions.NotImplementedException();
+        // trace(paramType);
+        // trace(argType);
+        return param;
     }
 
     var externAssemblies = ['mscorlib'];
@@ -1223,13 +1245,15 @@ class GenPE extends Gen {
         }
         
         closure.methods.set(name, decl);
+        
         return name;
     }
 
     function getGenericParameters(f:FunctionDecl) {
-        if(f.params.length == 0) return null;
+        if(f.params == null || f.params.length == 0) return null;
         var ret = new GenericParameters();
         for (param in f.params) {
+            
             var constraints = new ArrayList();
             for (constraint in param.constraints)
                 constraints.Add(toClrTypeRef(types.checker.makeType(constraint)));
@@ -1245,11 +1269,12 @@ class GenPE extends Gen {
      */
     function endMethod(ret:TType, location:Location) {
         if (!lastExprWasRet)
-            if (ret == TVoid) {
+            if (types.checker.follow(ret).match(TVoid)) {
                 noneInstr(peapi.Op.ret, location);
             } else {
                 throw 'Missing return of type ${ret.typeStr()}';
             }
+        
     }
 
     function getGenericParamCount(funcArgs:Array<{t:TType}>) {
@@ -1334,7 +1359,7 @@ typedef Closure = {
     var localTypes:Map<String, TType>;
     var methods:Map<String, FunctionDecl>;
 
-    var clrTypeRef:BaseTypeRef;
+    var clrTypeRef:Void->BaseTypeRef;
     var local:Expr;
     var localName:String;
 }

@@ -22,7 +22,7 @@ class Test {
     public static function main() {
         // trace(parser.parseString('cs.system.Console.WriteLine("what")'));
         testGen();
-        generateHelloWorld();
+        // generateHelloWorld();
     }
     static var parser = new hscript.Parser();
     static function testGen() {
@@ -37,7 +37,7 @@ class Test {
         try {
             if(cond) for(i in 0...10) func(t);
         } catch(e:cs.system.Exception) {
-            trace(e);
+            func(e.ToString());
         }
     }
 }
