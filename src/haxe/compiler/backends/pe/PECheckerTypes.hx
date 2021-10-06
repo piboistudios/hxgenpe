@@ -129,17 +129,17 @@ class PECheckerTypes extends CheckerBase {
         var definedTypes:Dynamic = definedTypesEnumerable.GetEnumerator();
         trace('got enumerator');
         var current = null;
-        // var types:Iterable<cs.system.reflection.TypeInfo> = {
-        //     iterator: () -> {
-        //         next: () -> current,
-        //         hasNext: () -> {
-        //             var ret = definedTypes.MoveNext();
-        //             current = if(ret) definedTypes.Current else null;
-        //             ret;
-        //         }
-        //     }
-        // };
-        var types = [asm.GetType("System.String"), asm.GetType("System.Exception")].concat(delegateTypeNames.map(cast asm.GetType));
+        var types:Iterable<cs.system.reflection.TypeInfo> = {
+            iterator: () -> {
+                next: () -> current,
+                hasNext: () -> {
+                    var ret = definedTypes.MoveNext();
+                    current = if(ret) definedTypes.Current else null;
+                    ret;
+                }
+            }
+        };
+        // var types = [asm.GetType("System.String"), asm.GetType("System.Exception")].concat(delegateTypeNames.map(cast asm.GetType));
         var allTypes = [];
         var asmMeta = mkNetLibMeta(asmName);
         for (type in types) {
@@ -147,13 +147,17 @@ class PECheckerTypes extends CheckerBase {
                 // trace('Skipping ${type.Name}');
                 continue;
             }
-            trace(type.Name);
+            if(delegateTypeNames.indexOf(type.Name) != -1) trace(toHxTypeName(type.FullName));
             var isPrivate = type.IsNotPublic;
-            if (type.IsClass) {
+            var genericArgs = type.GenericTypeArguments;
+            if(genericArgs == null) genericArgs = cast [];
+            if (type.IsClass||type.IsInterface||type.IsValueType) {
+                var extend:Dynamic = if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null;
+                if(type.IsInterface) extend = [extend];
                 // trace(type.getName());
-                var decl:Dynamic = {
+                var decl = {
                     name: toHxTypeName(type.getName()).join('.'),
-                    params: [for(typeParam in type.GenericTypeArguments) {
+                    params: [for(typeParam in genericArgs) {
                         name: typeParam.Name
                         // I guess just ignore constraints or whatever and see what chaos ensues
                     }], // TODO: hscript generic params
@@ -220,13 +224,15 @@ class PECheckerTypes extends CheckerBase {
                                     access: getClrMethodAccess(method)
                                 }
                         ]),
-                    extend: if(type.BaseType != null) CTPath(toHxTypeName(type.BaseType.getName())) else null
+                    extend: extend
                 };
-                if(delegateTypeNames.indexOf(type.BaseType.Name) != 0) declareType(DClass(decl));
-                else {
+                // if(type.BaseType == null || delegateTypeNames.indexOf(type.BaseType.Name) != 0) 
+                    declareType(if(type.IsInterface) DInterface(decl) else DClass(decl));
+                // else {
                     
-                }
+                // }
             } else if (type.IsEnum) {
+                trace('enum');
                 var eenum:EnumDecl = {
                     params: [], // no GADTs  in CLR, thank god :)
                     name: type.FullName,
@@ -236,7 +242,8 @@ class PECheckerTypes extends CheckerBase {
                     fields: mkEnumFields(type)
                 };
                 declareType(DEnum(eenum));
-            } else if (type.IsInterface) {} else if (type.IsValueType) {} else {}
+            }  else {}
+            // trace('next');
             // if(decl != null) addType(decl);
         }
     }
@@ -353,6 +360,22 @@ class PECheckerTypes extends CheckerBase {
     }
 
 	function mkEnumFields(type:cs.system.Type):Array<FieldDecl> {
-		throw new haxe.exceptions.NotImplementedException();
+		var names = cs.system.Enum.GetNames(type);
+        var values = cs.system.Enum.GetValues(type);
+        return [for(i in 0...names.length) {
+            var name = names.GetValue(i);
+            var value = values.GetValue(i);
+            {
+                name: name,
+                meta: [],
+                access: [APublic],
+                kind: KVar({
+                    expr: EConst(CInt(value)).mk(null),
+                    get: null,
+                    set: null,
+                    type: CTPath(toHxTypeName(type.FullName))
+                })
+            }
+        }];
 	}
 }

@@ -12,7 +12,7 @@ class CheckerBase implements GenCheckerTypes {
 
     public function lookup(name:String) return decls[name];
     public function resolve(name:String, ?args:Array<TType>):TType {
-        trace('trying to resolve $name');
+        // trace('trying to resolve $name');
         if(name == "String") return t_string;
         if (name == "Null") {
             if (args == null || args.length != 1)
