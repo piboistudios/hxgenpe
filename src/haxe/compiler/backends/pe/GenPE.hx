@@ -244,7 +244,7 @@ class GenPE extends Gen {
             paramList.Add(paramDef);
         }
         var genericParameters = getGenericParameters(f);
-        beforeMethod(f.expr, field.name);
+        var expr = beforeMethod(f.expr, field.name);
         var method = new MethodDef(gen, cast flags, cast conv, implAttr, field.name, retType, paramList, f.expr.location(), genericParameters, ownerType);
 
         if (field.name == "main" && owner == mainClass)
@@ -254,8 +254,8 @@ class GenPE extends Gen {
         // BUT by default .NET allows unverifiable PEs so.... is it worth the bother? Not right now
         labelRefCount = [];
         locals = [];
-        mapToClrMethodBody(f.expr);
-        endMethod(ret, f.expr.location());
+        mapToClrMethodBody(expr);
+        endMethod(ret, expr.location());
         closure = null;
         generateLocals();
 
@@ -263,13 +263,14 @@ class GenPE extends Gen {
         gen.EndMethodDef(f.expr.location());
 
     }
-    function beforeMethod(body:Expr, methodName:String)  if (body.expr().match(EBlock(_))) {
+    function beforeMethod(body:Expr, methodName:String)  return if (body.expr().match(EBlock(_))) {
         upcomingMethodName = methodName;
-        findLocals(body);
+        var newBody = findLocals(body);
         setLocalSlots();
         addClosureToChecker();
         defineClosure();
-    }
+        newBody;
+    } else body;
 
     function referenceLabel(refName) {
         var c = labelRefCount[refName];
@@ -409,6 +410,7 @@ class GenPE extends Gen {
         throw new NotImplementedException();
     }
     function findLocals(e:Expr) {
+        var ret = e;
         // trace(e.expr());
         switch e.expr() {
             case EIf(cond, e1, e2):
@@ -418,12 +420,13 @@ class GenPE extends Gen {
                     findLocals(e2);
 
             case EBlock(e):
-                for (expr in e)
-                    findLocals(expr);
+                ret = EBlock([for (expr in e)
+                    findLocals(expr)]).mk(null);
             case EVar(n, t, e):
                 var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, e)) else null);
                 declareLocal(n, type);
-                findLocals(e);
+                
+                ret = EVar(n, t, findLocals(e)).mk(null);
             case EFor(v, it, e):
                 var type = switch types.checker.check(it) {
                     case TAnon(f):
@@ -435,16 +438,17 @@ class GenPE extends Gen {
                 }
 
                 declareLocal(v, type);
-                findLocals(e);
+                ret = EFor(v, it, findLocals(e)).mk(null);
             case ETry(e, v, t, ecatch):
                 var catchType = types.checker.makeType(t, ecatch);
+                
+                
+                ret = ETry(findLocals(e),v, t, findLocals(ecatch)).mk(null);
                 declareLocal(v, catchType);
-                findLocals(e);
-                findLocals(ecatch);
             case EFunction(kind, decl):
-                addToClosure(kind, decl);
-                var e = decl.expr;
-                findLocals(e);
+                kind = FNamed(addToClosure(kind, decl), false);
+                ret = EFunction(kind, decl).mk(null);
+
                 e.iter(e -> switch e.expr() {
                     case EIdent(v):
                         if (isLocal(v)) {
@@ -452,8 +456,11 @@ class GenPE extends Gen {
                         }
                     default: findLocals(e);
                 });
+                decl.expr = findLocals(decl.expr);
+                ret = EFunction(kind, decl).mk(null);
             default:
         }
+        return ret;
     }
     // da meat
     function mapToClrMethodBody(?expr:hscript.Expr, ?withType:TType, ?_after:Void->Void, ?_before:Void->Void) {
@@ -1045,11 +1052,11 @@ class GenPE extends Gen {
             };
             var startLocation = new Location(0, 0);
             var genParams = getGenericParameters(decl);
-            beforeMethod(decl.expr, name);
+            var expr = beforeMethod(decl.expr, name);
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
             method.SetMaxStack(8);
-            mapToClrMethodBody(decl.expr);
-            endMethod(retType, decl.expr.location());
+            mapToClrMethodBody(expr);
+            endMethod(retType, expr.location());
             gen.EndMethodDef(new Location(0, 0));
         }
         trace('defined ${gen.CurrentTypeDef.FullName}');
