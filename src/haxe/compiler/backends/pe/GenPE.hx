@@ -1221,7 +1221,8 @@ class GenPE extends Gen {
             trace('clrType: $clrType');
             var methodRef = clrType.GetMethodRef(toClrTypeRef(ret), if (isInstanceField) CallConv.Instance else CallConv.Default, f,
                 cs.Lib.nativeArray([for (argType in argTypes) toClrTypeRef(argType)], true), getGenericParamCount(args));
-            methodInstr(MethodOp.ldvirtfn, methodRef, e.location());
+            
+            methodInstr(if(isInstanceField) MethodOp.ldvirtfn else MethodOp.ldftn, methodRef, e.location());
         } else {
             trace('args of ${printer.exprToString(e)}.$f is null');
             var fieldOp = if (isRhsOfOp) FieldOp.stsfld else FieldOp.ldfld;
