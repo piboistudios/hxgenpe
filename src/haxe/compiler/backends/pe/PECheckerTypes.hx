@@ -1,5 +1,5 @@
 package haxe.compiler.backends.pe;
-
+using haxe.compiler.backends.pe.Tools;
 import cs.system.collections.generic.IEnumerable_1;
 import cs.system.reflection.PropertyInfo;
 import cs.system.reflection.MethodInfo;
@@ -35,10 +35,12 @@ class PECheckerTypes extends CheckerBase {
     public override function declareType(decl:ModuleDecl) {
         // trace('Adding $decl');
         var name = currentPack;
+        var isStruct = false;
         var type:CTypedecl = switch decl {
             case DClass(c):
                 name += c.name;
                 addDeclAssembly(c);
+                isStruct = c.meta.exists(m -> m.name == ':struct');
                 var cclass:CClass = {
                     name: name,
                     fields: [
@@ -71,6 +73,7 @@ class PECheckerTypes extends CheckerBase {
             // trace('Adding type: $type\r\n$type');
             types.set(name, type);
             decls.set(name, decl);
+            if(isStruct) structTypes.push(name);
             checker.setGlobal(name, TType({name: name, t: resolve(name), params:[]}, []));
         }
     }
@@ -101,7 +104,7 @@ class PECheckerTypes extends CheckerBase {
             if (assemblyMeta.params[0].e.match(EConst(CString(_)))) {
                 var const:hscript.Expr.Const = assemblyMeta.params[0].expr().getParameters()[0];
                 var assemblyName = const.getParameters()[0];
-                typeAssemblies[d.name] = assemblyName;
+                typeAssemblies[d.name.split('.').toClrPath()] = assemblyName;
             }
         }
     }
@@ -378,4 +381,9 @@ class PECheckerTypes extends CheckerBase {
             }
         }];
 	}
+    var structTypes:Array<String> = [];
+	public function isStruct(type:Null<TType>):Bool return switch checker.follow(type) {
+        case TInst(c, args): structTypes.indexOf(c.name) != -1;
+        default: false;
+    }
 }

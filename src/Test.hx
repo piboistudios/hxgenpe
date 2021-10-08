@@ -31,9 +31,15 @@ package test;
 
 class Test {
     public static function main() {
+        var y = "!";
         var t = "Hello, World!";
         var cond = true;
-        var func = function(t:String) {};
+        function doCall(t:String) {
+            y;
+        }
+        var func = function(t:String) {
+            doCall(t);
+        };
         try {
             if(cond) for(i in 0...10) func(t);
         } catch(e:cs.system.Exception) {
