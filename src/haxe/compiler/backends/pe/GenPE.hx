@@ -270,9 +270,9 @@ class GenPE extends Gen {
         if (beforeBody.length != 0) {
             var b = beforeBody;
             beforeBody = [];
-            mapToClrMethodBody(EBlock(b).mk(null));
+            generate(EBlock(b).mk(null));
         }
-        mapToClrMethodBody(expr);
+        generate(expr);
         endMethod(ret, expr.location());
         closure = null;
         generateLocals();
@@ -524,7 +524,7 @@ class GenPE extends Gen {
     }
 
     // da meat
-    function mapToClrMethodBody(?expr:hscript.Expr, ?withType:TType, ?topLevelExpr = true) {
+    function generate(?expr:hscript.Expr, ?withType:TType, ?topLevelExpr = true) {
         inline function prepVar(n:String, location:Location) {
             if (!topLevelExpr && closure != null && closure.locals.exists(n)) {
                 handleIdent(closure.localName, location);
@@ -544,17 +544,17 @@ class GenPE extends Gen {
             // var branchEnd:LabelInfo = null;
             beginSet();
             var tail = getSetTail();
-            mapToClrMethodBody(cond, withType, false);
+            generate(cond, withType, false);
             brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_COND), cond.location());
             runDeferred();
-            mapToClrMethodBody(e1, withType, false);
+            generate(e1, withType, false);
             runSet(tail);
             brTargetIdInstr(BranchOp.br_s, referenceLabel(LabelRefs.END_IF), e1.location());
             noneInstr(peapi.Op.nop, e1.location());
             putInstr(() -> {
                 var endOfConditionLabel = placeLabelRef(LabelRefs.END_COND);
                 if (e2 != null) {
-                    putInstr(() -> mapToClrMethodBody(e2, withType, false));
+                    putInstr(() -> generate(e2, withType, false));
                     runSet(tail);
                 }
                 noneInstr(peapi.Op.nop, e.location());
@@ -569,7 +569,7 @@ class GenPE extends Gen {
         var e = expr;
         switch e.expr() {
             case EField(e, f):
-                // mapToClrMethodBody(e, withType, after, false,)
+                // generate(e, withType, after, false,)
 
                 if (!topLevelExpr) {
                     beginSet();
@@ -599,7 +599,7 @@ class GenPE extends Gen {
                 topLevelExpr = false;
                 prepVar(n, loc);
                 afterNextInstructionSet(setVar(n, toClrTypeRef(if (t != null) types.checker.makeType(t, expr) else type), loc, getLocalMetadata(e)));
-                mapToClrMethodBody(e, type, false);
+                generate(e, type, false);
                 endSet();
                 expectedPtrSigType = null;
                 runDeferred();
@@ -610,14 +610,14 @@ class GenPE extends Gen {
                 beginSet();
                 var setTail = getSetTail();
                 for (expr in e)
-                    mapToClrMethodBody(expr, withType, true);
+                    generate(expr, withType, true);
                 runSet(setTail);
                 handlerBlock = new HandlerBlock(from, gen.CurrentMethodDef.AddLabel());
                 gen.CurrentMethodDef.EndLocalsScope();
 
             case EReturn(e):
                 beginSet();
-                mapToClrMethodBody(e, withType, false);
+                generate(e, withType, false);
                 noneInstr(peapi.Op.ret, e.location());
                 lastExprWasRet = true;
                 endSet();
@@ -666,9 +666,9 @@ class GenPE extends Gen {
                 var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
                 beginSet();
                 var tail = getSetTail();
-                mapToClrMethodBody(cond, withType, false);
+                generate(cond, withType, false);
                 brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
-                mapToClrMethodBody(e, withType, false);
+                generate(e, withType, false);
                 brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
                 noneInstr(peapi.Op.nop, e.location());
                 runSet(tail);
@@ -686,14 +686,14 @@ class GenPE extends Gen {
                         var loc = e.location();
                         var tail = getSetTail();
                         prepVar(loopVar, loc);
-                        mapToClrMethodBody(min, false);
+                        generate(min, false);
                         setVar(loopVar, Primitives.INT, loc, []);
                         var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
                         beginSet();
-                        mapToClrMethodBody(max, false);
+                        generate(max, false);
                         handleIdent(loopVar, loc);
                         brTargetIdInstr(BranchOp.beq, referenceLabel(LabelRefs.END_LOOP), it.location());
-                        mapToClrMethodBody(e, withType, false);
+                        generate(e, withType, false);
                         prepVar(loopVar, loc);
                         noneInstr(peapi.Op.ldc_i4_1, loc);
                         handleIdent(loopVar, loc);
@@ -721,7 +721,7 @@ class GenPE extends Gen {
                 var newFuncPtrExpr = ENew(getNestedFullName(getFunctionTypeRef(args, ret)), [EField(closure.local, closureMethod).mk(e)]).mk(e);
                 beginSet();
                 var tail = getSetTail();
-                mapToClrMethodBody(newFuncPtrExpr, withType, topLevelExpr);
+                generate(newFuncPtrExpr, withType, topLevelExpr);
                 runSet(tail);
             // <closureLocal>.<closureMethod>;
 
@@ -733,7 +733,7 @@ class GenPE extends Gen {
                     trace('clr type: ${clrType.FullName}');
 
                     for (param in params)
-                        mapToClrMethodBody(param, null, false);
+                        generate(param, null, false);
                     var method = clrType.GetMethodRef(Primitives.VOID, CallConv.Instance, ".ctor", cs.Lib.nativeArray([
                         for (param in params) {
                             var ret = toClrTypeRef(types.checker.check(param), true);
@@ -761,7 +761,7 @@ class GenPE extends Gen {
             case EThrow(e):
                 var exception:Expr = convertToException(e);
                 beginSet();
-                mapToClrMethodBody(exception, false);
+                generate(exception, false);
                 noneInstr(peapi.Op.throwOp, e.location());
             case ETry(e, v, t, ecatch): // TODO: hscript: catch should be an array....
                 // similar semantics as try/catch in c#
@@ -775,7 +775,7 @@ class GenPE extends Gen {
                     var catchType = toClrTypeRef(types.checker.makeType(t, expr));
                     beginSet();
                     afterNextInstructionSet(brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
-                    mapToClrMethodBody(e, withType, true);
+                    generate(e, withType, true);
                     var catchLoc = ecatch.location();
                     putInstr(() -> {
                         tryBlock = new TryBlock(handlerBlock, e.location());
@@ -786,7 +786,7 @@ class GenPE extends Gen {
                         setVar(v, catchType, catchLoc, getLocalMetadata(ecatch));
                     });
                     afterNextInstructionSet(brTargetIdInstr(BranchOp.leave_s, referenceLabel(LabelRefs.END_TRY), e.location()));
-                    mapToClrMethodBody(ecatch, withType, true);
+                    generate(ecatch, withType, true);
                     putInstr(() -> {
                         catchBlock = new CatchBlock(catchType);
                         catchBlock.SetHandlerBlock(handlerBlock);
@@ -817,8 +817,8 @@ class GenPE extends Gen {
                     var beginLoop = placeLabelRef(LabelRefs.BEGIN_LOOP);
                     beginSet();
                     var tail = getSetTail();
-                    mapToClrMethodBody(e, withType, false);
-                    mapToClrMethodBody(cond, withType, false);
+                    generate(e, withType, false);
+                    generate(cond, withType, false);
                     brTargetIdInstr(BranchOp.brfalse_s, referenceLabel(LabelRefs.END_LOOP), cond.location());
                     brTargetIdInstr(BranchOp.br_s, beginLoop.Name, e.location());
                     noneInstr(peapi.Op.nop, e.location());
@@ -827,9 +827,9 @@ class GenPE extends Gen {
                 });
             case EMeta(name, args, e):
                 meta = {name: name, args: args, expr: e};
-                mapToClrMethodBody(e, withType, false);
+                generate(e, withType, false);
             case ECheckType(e, t): // or not
-                mapToClrMethodBody(e, types.checker.makeType(t, expr), false);
+                generate(e, types.checker.makeType(t, expr), false);
             default:
         }
     }
@@ -967,11 +967,11 @@ class GenPE extends Gen {
             case '--' | '++':
                 handleIncOrDec(op, prefix, e, type);
             case '!' if (prefix):
-                mapToClrMethodBody(e, false);
+                generate(e, false);
                 noneInstr(peapi.Op.ldc_i4_0, e.location());
                 noneInstr(peapi.Op.ceq, e.location());
             case '~' if (prefix):
-                mapToClrMethodBody(e, false);
+                generate(e, false);
                 noneInstr(peapi.Op.not, e.location());
             default:
                 throw 'invalid unary operator: $op (near ${printer.exprToString(e)})';
@@ -1135,13 +1135,13 @@ class GenPE extends Gen {
         // If it's not static, put the instance on the stack
         if (isInstanceMethod) {
             trace('putting instance expr: ${printer.exprToString(callerExpr)}');
-            mapToClrMethodBody(callerExpr, false);
+            generate(callerExpr, false);
         }
         if (implicitThisCall) {
             intInt32Instr(IntOp.ldarg_s, 0, e.location());
         }
         if (ftnPtr)
-            mapToClrMethodBody(e, false);
+            generate(e, false);
         var methodOp = if (isInstanceMethod && !isStruct) {
             MethodOp.callvirt;
         } else MethodOp.call;
@@ -1152,7 +1152,7 @@ class GenPE extends Gen {
             var arg = funcArgs[i];
             var argType = arg.t;
             params[i] = doConversion(param, paramType, argType);
-            mapToClrMethodBody(params[i], argType, false);
+            generate(params[i], argType, false);
         }
 
         expectedPtrSigType = null;
@@ -1169,7 +1169,7 @@ class GenPE extends Gen {
     // moved into the closure as member fields.
     function handleIdent(id:String, location:Location, ?pos:haxe.PosInfos) {
         inline function closureField()
-            mapToClrMethodBody(EField(closure.local, id).mk(null), false);
+            generate(EField(closure.local, id).mk(null), false);
         trace('getting $id @$pos $argNames $inClosure');
         var argIndex = argNames.indexOf(id);
         trace(locals);
@@ -1197,7 +1197,7 @@ class GenPE extends Gen {
 
     function handleField(e:Expr, f:String) {
         // var expectedPtrSigType = expectedPtrSigType;
-        // mapToClrMethodBody(e); d
+        // generate(e); d
 
         var type = types.checker.check(e);
 
@@ -1214,7 +1214,7 @@ class GenPE extends Gen {
         trace('2 $expectedPtrSigType $f $e $isRhsOfOp $argTypes $ret');
         var fieldType = toClrTypeRef(types.checker.getField(type, f, e, isRhsOfOp, argTypes, ret));
         trace('3 ${fieldType.FullName}');
-        mapToClrMethodBody(e, false); // map to clr method body..
+        generate(e, false); // map to clr method body..
         if (args != null) { // assigning to method pointer..
             trace('getting $f from ${type.typeStr()} with args ${[for (arg in args) arg.t.typeStr()]} and ret ${ret.typeStr()}');
             var isInstanceField = !types.checker.isFieldStatic(type, f, argTypes, ret);
@@ -1279,7 +1279,7 @@ class GenPE extends Gen {
             var expr = beforeMethod(decl, name, true, true);
             var method = new MethodDef(gen, cast flags, conv, implAttr, name, retClrType, paramList, startLocation, genParams, gen.CurrentTypeDef);
             method.SetMaxStack(8);
-            mapToClrMethodBody(expr);
+            generate(expr);
             endMethod(retType, expr.location());
             gen.EndMethodDef(EMPTY_LOC);
         }
