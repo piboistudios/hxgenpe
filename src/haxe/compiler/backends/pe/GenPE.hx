@@ -593,7 +593,7 @@ class GenPE extends Gen {
                 var type = types.checker.check(e, if (t != null) WithType(types.checker.makeType(t, expr)) else null);
                 trace('were saying type of ${printer.exprToString(e)} is ${type.typeStr()}');
 
-                expectedType = type;
+                expectedPtrSigType = type;
                 var loc = e.location();
                 beginSet();
                 topLevelExpr = false;
@@ -601,9 +601,9 @@ class GenPE extends Gen {
                 afterNextInstructionSet(setVar(n, toClrTypeRef(if (t != null) types.checker.makeType(t, expr) else type), loc, getLocalMetadata(e)));
                 mapToClrMethodBody(e, type, false);
                 endSet();
-                expectedType = null;
+                expectedPtrSigType = null;
                 runDeferred();
-            // trace('setting it back from ${expectedType.typeStr()} to ${previousexpectedType == null ? null : previousexpectedType.typeStr()}');
+            // trace('setting it back from ${expectedPtrSigType.typeStr()} to ${previousexpectedPtrSigType == null ? null : previousexpectedPtrSigType.typeStr()}');
             case EBlock(e):
                 var from = gen.CurrentMethodDef.AddLabel();
                 gen.CurrentMethodDef.BeginLocalsScope();
@@ -643,10 +643,10 @@ class GenPE extends Gen {
             case EBinop(op, e1, e2):
                 var type1 = types.checker.check(e1, with);
                 var type2 = types.checker.check(e2, WithType(type1));
-                var previousType = expectedType;
+                var previousType = expectedPtrSigType;
                 if (e2.expr().match(EField(_, _))) {
                     isRhsOfOp = true;
-                    expectedType = type2;
+                    expectedPtrSigType = type2;
                 }
                 beginSet();
                 handleBinop(op, [e1, e2], [type1, type2]);
@@ -717,7 +717,7 @@ class GenPE extends Gen {
                         }
                 ];
                 var ret = types.checker.follow(types.checker.makeType(decl.ret));
-                expectedType = TFun(args, ret);
+                expectedPtrSigType = TFun(args, ret);
                 var newFuncPtrExpr = ENew(getNestedFullName(getFunctionTypeRef(args, ret)), [EField(closure.local, closureMethod).mk(e)]).mk(e);
                 beginSet();
                 var tail = getSetTail();
@@ -1045,7 +1045,7 @@ class GenPE extends Gen {
                     default: false;
                 }
                 callerExpr = e;
-                expectedType = TFun([for (type in paramTypes) {name: '', opt: false, t: type}], if (retType == null) TVoid else retType);
+                expectedPtrSigType = TFun([for (type in paramTypes) {name: '', opt: false, t: type}], if (retType == null) TVoid else retType);
                 methodName = f;
                 callerType = types.checker.check(e);
                 isInstanceMethod = !types.checker.isFieldStatic(callerType, methodName, paramTypes, retType);
@@ -1155,7 +1155,7 @@ class GenPE extends Gen {
             mapToClrMethodBody(params[i], argType, false);
         }
 
-        expectedType = null;
+        expectedPtrSigType = null;
 
         methodInstr(methodOp, methRef, e.location());
     }
@@ -1193,17 +1193,17 @@ class GenPE extends Gen {
     }
 
     var isRhsOfOp = false;
-    var expectedType:Null<TType>;
+    var expectedPtrSigType:Null<TType>;
 
     function handleField(e:Expr, f:String) {
-        // var expectedType = expectedType;
+        // var expectedPtrSigType = expectedPtrSigType;
         // mapToClrMethodBody(e); d
 
         var type = types.checker.check(e);
 
         var clrType = toClrTypeRef(type);
         var ret:TType = null;
-        var args = switch expectedType {
+        var args = switch expectedPtrSigType {
             case TFun(args, r):
                 ret = r;
                 args;
@@ -1211,7 +1211,7 @@ class GenPE extends Gen {
         };
         trace('1 $args');
         var argTypes = if (args == null) null else [for (arg in args) arg.t];
-        trace('2 $expectedType $f $e $isRhsOfOp $argTypes $ret');
+        trace('2 $expectedPtrSigType $f $e $isRhsOfOp $argTypes $ret');
         var fieldType = toClrTypeRef(types.checker.getField(type, f, e, isRhsOfOp, argTypes, ret));
         trace('3 ${fieldType.FullName}');
         mapToClrMethodBody(e, false); // map to clr method body..
